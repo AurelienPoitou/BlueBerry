@@ -5,244 +5,124 @@
  *     Implement a timer that fires every millisecond so that we can
  *     time events in the application. Implement a scheduled task queue.
  */
+
 #include "timer.h"
+#include <unistd.h> // For usleep
+#include <stdint.h>
+#include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
-#include <xc.h>
+#include <time.h>   // For clock_gettime
 #include "log.h"
-#include "sfr_setters.h"
-volatile uint32_t TimerCurrentMillis = 0;
+
+#define TIMER_TASKS_MAX 32 // Define the maximum number of scheduled tasks
+
 volatile TimerScheduledTask_t TimerRegisteredTasks[TIMER_TASKS_MAX];
 uint8_t TimerRegisteredTasksCount = 0;
 
-/**
- * TimerInit()
- *     Description:
- *         Initialize the system Timer (Timer1)
- *     Params:
- *         None
- *     Returns:
- *         void
- */
-void TimerInit()
-{
-    T1CON = 0;
-    T1CON = TIMER_ON | STOP_TIMER_IN_IDLE_MODE | TIMER_SOURCE_INTERNAL | GATED_TIME_DISABLED | TIMER_16BIT_MODE | CLOCK_DIVIDER;
-    PR1 = PR1_SETTING;
-    SetTIMERIP(TIMER_INDEX, TIMER_INTERRUPT_PRIORITY);
-    SetTIMERIF(TIMER_INDEX, 0);
-    SetTIMERIE(TIMER_INDEX, 1);
+// Function to initialize the timer
+void TimerInit() {
+    TimerRegisteredTasksCount = 0;
+    LogDebug(LOG_SOURCE_SYSTEM, "Timer initialized.");
 }
 
-/**
- * TimerDelayMicroseconds()
- *     Description:
- *         Block for the given amount of microseconds. You really should not
- *         block the application for more than 10us at a time.
- *     Params:
- *         uint16_t delay - Delay for x amoount of microseconds
- *     Returns:
- *         void
- */
-void TimerDelayMicroseconds(uint16_t delay)
-{
-    TMR2 = 0;
-    // Set the delay to delay * 16 (ticks per microsecond)
-    PR2 = delay * 16;
-    // Reset interrupt flag
-    SetTIMERIF(2, 0);
-    T2CONbits.TON = 1;
-    while (!IFS0bits.T2IF);
-    T2CONbits.TON = 0;
+// Function to get the current milliseconds
+uint32_t TimerGetMillis() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint32_t)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
 }
 
-/**
- * TimerGetMillis()
- *     Description:
- *         Return the number of elapsed milliseconds since boot
- *     Params:
- *         None
- *     Returns:
- *         uint32_t - The milliseconds since boot
- */
-uint32_t TimerGetMillis()
-{
-    return (uint32_t) TimerCurrentMillis;
+// Function to delay in milliseconds
+void TimerDelayMilliseconds(uint16_t delay) {
+    usleep(delay * 1000); // Convert milliseconds to microseconds
 }
 
-/**
- * TimerProcessScheduledTasks()
- *     Description:
- *         Run through the scheduled tasks and run any that are due.
- *     Params:
- *         void
- *     Returns:
- *         void
- */
-void TimerProcessScheduledTasks()
-{
-    uint8_t idx;
-    for (idx = 0; idx < TimerRegisteredTasksCount; idx++) {
+// Function to delay in milliseconds
+void TimerDelayMicroseconds(uint16_t delay) {
+    usleep(delay);
+}
+
+// Function to process scheduled tasks
+void TimerProcessScheduledTasks() {
+    uint32_t currentMillis = TimerGetMillis(); // Get current time in milliseconds
+    for (uint8_t idx = 0; idx < TimerRegisteredTasksCount; idx++) {
         volatile TimerScheduledTask_t *t = &TimerRegisteredTasks[idx];
-        if (t->ticks >= t->interval && t->task != 0 && t->interval > 0) {
-            t->task(t->context);
-            t->ticks = 0;
+//        LogDebug(LOG_SOURCE_SYSTEM, "Checking TimerScheduledTask_t instance: { task: %p, context: %p, interval: %u, next_run: %d }\n",
+//            (void *)t->task, t->context, t->interval, t->next_execution);
+        if (t->task != NULL && currentMillis >= t->next_execution) {
+            t->task(t->context); // Execute the scheduled task
+//            LogDebug(LOG_SOURCE_SYSTEM, "Executing TimerScheduledTask_t instance: { task: %p, context: %p }\n", (void *)t->task, t->context);
+            t->next_execution = currentMillis + t->interval; // Schedule next execution
         }
     }
 }
 
-/**
- * TimerRegisterScheduledTask()
- *     Description:
- *         Register a function to be called at a given interval with the given
- *         context
- *     Params:
- *         void *task - A pointer to the function to call
- *         void *ctx - A pointer to the context for which to pass to the function
- *         uint16_t interval - The number of milliseconds to elapse before calling
- *     Returns:
- *         uint8_t - The index of the scheduled task in the tasks array
- */
-uint8_t TimerRegisterScheduledTask(void *task, void *ctx, uint16_t interval)
-{
-    uint8_t idx;
-    uint8_t slotIdx = TIMER_TASKS_MAX;
-    // Look for emptys slots to reuse
-    for (idx = 0; idx < TimerRegisteredTasksCount; idx++) {
-        if (TimerRegisteredTasks[idx].task == 0) {
-            slotIdx = idx;
-            break;
-        }
+// Function to register a scheduled task
+uint8_t TimerRegisterScheduledTask(TimerTask_t task, void *ctx, uint16_t interval) {
+    if (TimerRegisteredTasksCount >= TIMER_TASKS_MAX) {
+        LogError("FAILED TO REGISTER TIMER -- Allocations Full");
+        return 0;
     }
-    // No empty slot found, use a new one if available
-    if (slotIdx == TIMER_TASKS_MAX) {
-        if (TimerRegisteredTasksCount == TIMER_TASKS_MAX) {
-            LogError("FAILED TO REGISTER TIMER -- Allocations Full");
-            return 0;
-        }
-        slotIdx = TimerRegisteredTasksCount++;
+    if (interval == TIMER_TASK_DISABLED) {
+        return 0;
     }
     TimerScheduledTask_t scheduledTask;
     scheduledTask.task = task;
     scheduledTask.context = ctx;
-    scheduledTask.ticks = 0;
     scheduledTask.interval = interval;
-    TimerRegisteredTasks[slotIdx] = scheduledTask;
-    return slotIdx;
+    scheduledTask.next_execution = TimerGetMillis() + interval; // Set the next execution time
+    LogDebug(LOG_SOURCE_SYSTEM, "Registering TimerScheduledTask_t instance: { task: %p, context: %p, interval: %u, next_run: %d }\n",
+             (void *)task, ctx, interval, scheduledTask.next_execution);
+    TimerRegisteredTasks[TimerRegisteredTasksCount++] = scheduledTask;
+    return TimerRegisteredTasksCount - 1; // Return the task ID
 }
 
-/**
- * TimerUnregisterScheduledTask()
- *     Description:
- *         Unregister a previously scheduled task
- *     Params:
- *         void *task - A pointer to the function to call
- *     Returns:
- *         uint8_t - The status code
- */
-uint8_t TimerUnregisterScheduledTask(void *task)
-{
-    uint8_t idx;
-    for (idx = 0; idx < TimerRegisteredTasksCount; idx++) {
+// Function to unregister a scheduled task
+uint8_t TimerUnregisterScheduledTask(TimerTask_t task) {
+    for (uint8_t idx = 0; idx < TimerRegisteredTasksCount; idx++) {
         volatile TimerScheduledTask_t *t = &TimerRegisteredTasks[idx];
         if (t->task == task) {
-            memset((void *)t, 0, sizeof(TimerScheduledTask_t));
-            return 0;
+            memset((void *)t, 0, sizeof(TimerScheduledTask_t)); // Clear the task
+            LogDebug(LOG_SOURCE_SYSTEM, "Unregistered TimerScheduledTask_t instance: { task: %p }\n", (void *)task);
+            return 0; // Success
         }
     }
-    return 1;
+    return 1; // Task not found
 }
 
-/**
- * TimerUnregisterScheduledTaskById()
- *     Description:
- *         Unregister a previously scheduled task using the given ID
- *     Params:
- *         uint8_t - The index of the scheduled task in the tasks array
- *     Returns:
- *         void
- */
-void TimerUnregisterScheduledTaskById(uint8_t taskId)
-{
-    volatile TimerScheduledTask_t *t = &TimerRegisteredTasks[taskId];
-    memset((void *)t, 0, sizeof(TimerScheduledTask_t));
-}
-
-/**
- * TimerResetScheduledTask()
- *     Description:
- *         Reset the ticks on a given task
- *     Params:
- *         uint8_t - The index of the scheduled task in the tasks array
- *     Returns:
- *         void
- */
-void TimerResetScheduledTask(uint8_t taskId)
-{
-    volatile TimerScheduledTask_t *t = &TimerRegisteredTasks[taskId];
-    if (t->task != 0) {
-        t->ticks = 0;
-    }
-}
-
-
-/**
- * TimerSetTaskInterval()
- *     Description:
- *         Change the timer interval
- *     Params:
- *         uint8_t taskId - The index of the scheduled task in the tasks array
- *         uint16_t interval - The number of milliseconds to elapse before calling
- *     Returns:
- *         void
- */
-void TimerSetTaskInterval(uint8_t taskId, uint16_t interval)
-{
-    volatile TimerScheduledTask_t *t = &TimerRegisteredTasks[taskId];
-    if (t->task != 0) {
-        t->interval = interval;
-    }
-}
-
-/**
- * TimerTriggerScheduledTask()
- *     Description:
- *         Call a given scheduled task immediately and reset the interval count
- *     Params:
- *         uint8_t - The index of the scheduled task in the tasks array
- *     Returns:
- *         void
- */
-void TimerTriggerScheduledTask(uint8_t taskId)
-{
-    volatile TimerScheduledTask_t *t = &TimerRegisteredTasks[taskId];
-    if (t->task != 0) {
-        // Prevent it from executing immediately
-        t->ticks = 0;
-        t->task(t->context);
-        // Reset the ticks so it runs exactly `interval` times before firing
-        t->ticks = 0;
-    }
-}
-
-/**
- * T1Interrupt
- *     Description:
- *         Update the milliseconds since boot. Iterate through the scheduled
- *         tasks and update their ticks.
- *     Params:
- *         void
- *     Returns:
- *         void
- */
-void __attribute__((__interrupt__, auto_psv)) _AltT1Interrupt(void)
-{
-    TimerCurrentMillis++;
-    uint8_t idx;
-    for (idx = 0; idx < TimerRegisteredTasksCount; idx++) {
-        volatile TimerScheduledTask_t *t = &TimerRegisteredTasks[idx];
-        if (t->task != 0 && t->interval > 0) {
-            TimerRegisteredTasks[idx].ticks++;
+// Function to reset a scheduled task
+void TimerResetScheduledTask(uint8_t taskId) {
+    if (taskId < TimerRegisteredTasksCount) {
+        volatile TimerScheduledTask_t *t = &TimerRegisteredTasks[taskId];
+        if (t->task != NULL) {
+            LogDebug(LOG_SOURCE_SYSTEM, "Resetting TimerScheduledTask_t instance: { task: %p }\n", (void *)t->task);
+            t->next_execution = TimerGetMillis() + t->interval; // Reset the next execution time
         }
     }
-    SetTIMERIF(TIMER_INDEX, 0);
+}
+
+// Function to set the task interval
+void TimerSetTaskInterval(uint8_t taskId, uint16_t interval) {
+    if (taskId < TimerRegisteredTasksCount) {
+        volatile TimerScheduledTask_t *t = &TimerRegisteredTasks[taskId];
+        if (t->task != NULL) {
+            t->interval = interval; // Update the interval
+            t->next_execution = TimerGetMillis() + interval; // Reset the next execution time
+            LogDebug(LOG_SOURCE_SYSTEM, "Updated TimerScheduledTask_t instance interval: { task: %p, new interval: %u }\n",
+                      (void *)t->task, interval);
+        }
+    }
+}
+
+// Function to trigger a scheduled task
+void TimerTriggerScheduledTask(uint8_t taskId) {
+    if (taskId < TimerRegisteredTasksCount) {
+        volatile TimerScheduledTask_t *t = &TimerRegisteredTasks[taskId];
+        if (t->task != NULL) {
+            LogDebug(LOG_SOURCE_SYSTEM, "Triggering TimerScheduledTask_t instance: { task: %p }\n", (void *)t->task);
+            t->task(t->context); // Execute the task
+            t->next_execution = TimerGetMillis() + t->interval; // Schedule next execution
+        }
+    }
 }

@@ -1,25 +1,11 @@
-/*
- * File: char_queue.h
- * Author: Ted Salmon <tass2001@gmail.com>
- * Description:
- *     Implement a FIFO queue to store bytes read from UART into
- */
+#include <stdint.h>
 #ifndef CHAR_QUEUE_H
 #define CHAR_QUEUE_H
 #include <stdint.h>
-/* The maximum amount of elements that the queue can hold */
-#define CHAR_QUEUE_SIZE 768
+#include <string.h>
 
-/**
- * CharQueue_t
- *     Description:
- *         This object holds CHAR_QUEUE_SIZE amounts of uint8_ts. It operates
- *         with a read and write cursor to keep track of where the next byte
- *         needs to be read from and where the next byte should be added.
- *         Once those cursors are exhausted, meaning they've hit capacity, they
- *         are reset. If data is not removed from the buffer before it hits
- *         capacity, the data will be lost.
- */
+#define CHAR_QUEUE_SIZE 128 // Define the size of the queue
+
 typedef struct CharQueue_t {
     volatile uint16_t readCursor;
     volatile uint16_t writeCursor;

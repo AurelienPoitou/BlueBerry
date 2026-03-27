@@ -1,16 +1,5 @@
-/*
- * File:   utils.c
- * Author: Ted Salmon <tass2001@gmail.com>
- * Description:
- *     Helper utils that may be useful in more than one place
- */
+#include <stdint.h>
 #include "utils.h"
-#include <ctype.h>
-#include <string.h>
-#include <xc.h>
-#include "../mappings.h"
-#include "config.h"
-#include "log.h"
 
 static const char UTILS_CHARS_LATIN[] =
     "AAAA\xa1""AACEEEEIIII" /* 00C0-00CF */
@@ -28,81 +17,12 @@ static const char UTILS_CHARS_LATIN[] =
 
 static int8_t BOARD_VERSION = -1;
 
-void UtilsCheckRCON()
-{
-    uint16_t rcon = RCON;
-    // POR and BOR are both set on a normal power-on
-    if ((rcon & 0x0003) == 0x0003 && (rcon & 0xC2F0) == 0) {
-        RCONbits.POR = 0;
-        RCONbits.BOR = 0;
-        return;
-    }
-    // Software Resets shouldn't be logged
-    if (RCONbits.SWR) {
-        RCONbits.SWR = 0;
-        return;
-    }
-    LogError("RCON: 0x%04X", rcon);
-    uint8_t reason = CONFIG_POR_REASON_NONE;
-    if (RCONbits.TRAPR) {
-        LogError("RST: Trap Conflict");
-        reason = CONFIG_POR_REASON_TRAP;
-        RCONbits.TRAPR = 0;
-    }
-    if (RCONbits.IOPUWR) {
-        LogError("RST: Illegal Opcode / Uninitialized W");
-        reason = CONFIG_POR_REASON_ILLEGAL_OP;
-        RCONbits.IOPUWR = 0;
-    }
-    if (RCONbits.CM) {
-        LogError("RST: Configuration Mismatch");
-        reason = CONFIG_POR_REASON_CFG_MISMATCH;
-        RCONbits.CM = 0;
-    }
-    if (RCONbits.EXTR) {
-        LogError("RST: External (MCLR)");
-        reason = CONFIG_POR_REASON_MCLR;
-        RCONbits.EXTR = 0;
-    }
-    if (RCONbits.WDTO) {
-        LogError("RST: Watchdog Timeout");
-        reason = CONFIG_POR_REASON_WDT;
-        RCONbits.WDTO = 0;
-    }
-    if (RCONbits.BOR && !(rcon & 0x0001)) {
-        LogError("RST: Brown-out");
-        reason = CONFIG_POR_REASON_BROWNOUT;
-        RCONbits.BOR = 0;
-    }
-    RCONbits.POR = 0;
-    ConfigSetByte(CONFIG_POR_REASON, reason);
-
-}
-
-/**
- * UtilsConvertCmToIn()
- *     Description:
- *         Convert Centimeters to the nearest whole inch
- *     Params:
- *         uint8_t cm - Centimeters
- *     Returns:
- *         uint8_t The converted and rounded value in inches
- */
 uint8_t UtilsConvertCmToIn(uint8_t cm)
 {
     float impVal = cm / 2.54;
     return (int)(impVal < 0 ? (impVal - 0.5) : (impVal + 0.5));
 }
 
-/**
- * UtilsDisplayValueInit()
- *     Description:
- *         Get a blank display value struct
- *     Params:
- *         None
- *     Returns:
- *         UtilsAbstractDisplayValue_t
- */
 UtilsAbstractDisplayValue_t UtilsDisplayValueInit(char *text, uint8_t status)
 {
     UtilsAbstractDisplayValue_t value;
@@ -114,37 +34,18 @@ UtilsAbstractDisplayValue_t UtilsDisplayValueInit(char *text, uint8_t status)
     return value;
 }
 
-/**
- * UtilsGetBoardVersion()
- *     Description:
- *         Get the board byte based on the I/O pin configuration
- *     Params:
- *         None
- *     Returns:
- *         uint8_t The identified board type
- */
 uint8_t UtilsGetBoardVersion()
 {
-    if (BOARD_VERSION == -1) {
+/*    if (BOARD_VERSION == -1) {
         if (BOARD_VERSION_STATUS == BOARD_VERSION_ONE) {
             BOARD_VERSION = BOARD_VERSION_ONE;
         } else {
             BOARD_VERSION = BOARD_VERSION_TWO;
         }
-    }
+    }*/
     return BOARD_VERSION;
 }
 
-/**
- * UtilsGetMinByte()
- *     Description:
- *         Return the smallest byte in the given pointer
- *     Params:
- *         uint8_t *bytes - The byte array
- *         uint8_t length - The array length
- *     Returns:
- *         uint8_t The lowest value
- */
 uint8_t UtilsGetMinByte(uint8_t *bytes, uint8_t length)
 {
     uint8_t minValue = 255;
@@ -157,15 +58,6 @@ uint8_t UtilsGetMinByte(uint8_t *bytes, uint8_t length)
     return minValue;
 }
 
-/**
- * UtilsGetUnicodeByteLength()
- *     Description:
- *         Get the number of bytes in the unicode character
- *     Params:
- *         uint8_t byte - The byte to inspect
- *     Returns:
- *         uint8_t The number of bytes in the unicode character
- */
 uint8_t UtilsGetUnicodeByteLength(uint8_t byte)
 {
     uint8_t bytesInChar = 1;
@@ -179,18 +71,6 @@ uint8_t UtilsGetUnicodeByteLength(uint8_t byte)
     return bytesInChar;
 }
 
-/**
- * UtilsNormalizeText()
- *     Description:
- *         Unescape characters and convert them from UTF-8 to their Unicode
- *         bytes. This is to support extended ASCII.
- *     Params:
- *         char *string - The subject
- *         const char *input - The string to copy from
- *         uint16_t max_len - Max output buffer size
- *     Returns:
- *         void
- */
 void UtilsNormalizeText(char *string, const char *input, uint16_t max_len)
 {
     uint16_t idx = 0;
@@ -216,10 +96,8 @@ void UtilsNormalizeText(char *string, const char *input, uint16_t max_len)
             unicodeChar = 0;
             char currentByteBuf[] = {input[idx + 1], input[idx + 2], '\0'};
             uint8_t currentByte = UtilsStrToHex(currentByteBuf);
-            // Identify number of bytes to read from the first byte
             bytesInChar = UtilsGetUnicodeByteLength(currentByte);
             uint8_t charsToRead = bytesInChar * 3;
-            // Identify if we can read all the bytes
             if ((idx + charsToRead) <= strLength) {
                 uint8_t byteIdx = idx;
                 while (bytesInChar != 0) {
@@ -236,7 +114,6 @@ void UtilsNormalizeText(char *string, const char *input, uint16_t max_len)
         } else if (currentChar > 0x7F) {
             unicodeChar = 0;
             bytesInChar = UtilsGetUnicodeByteLength(currentChar);
-            // Identify if we can read all the bytes
             if ((idx + bytesInChar) <= strLength) {
                 while (bytesInChar != 0) {
                     uint8_t byte = input[idx];
@@ -270,8 +147,6 @@ void UtilsNormalizeText(char *string, const char *input, uint16_t max_len)
                     }
                 }
             } else {
-                // Convert UTF-8 byte to Unicode then check if it falls within
-                // the range of extended ASCII
                 uint32_t extendedChar = (unicodeChar & 0xFF) + ((unicodeChar >> 8) - 0xC2) * 64;
                 if (uiMode == CONFIG_UI_BMBT && extendedChar >= 0xA0 && extendedChar <= 0xFC) {
                     string[strIdx++] = (char) extendedChar;
@@ -307,66 +182,7 @@ void UtilsNormalizeText(char *string, const char *input, uint16_t max_len)
     string[strIdx] = '\0';
 }
 
-/**
- * UtilsSubstrExists()
- *     Description:
- *         Check if a substring exists within the first `length` bytes of a
- *         string. If `boundary` is non-zero, only check positions immediately
- *         following that boundary character (or the start of the string).
- *     Params:
- *         const char *haystack - The string to search in
- *         uint8_t length - Number of bytes to search within
- *         const char *needle - The substring to find
- *         char boundary - Boundary character to anchor searches, or 0 to
- *             search every position
- *     Returns:
- *         uint8_t - 1 if found, 0 otherwise
- */
-uint8_t UtilsSubstrExists(
-    const char *haystack,
-    uint8_t length,
-    const char *needle,
-    char boundary
-) {
-    uint8_t needleLen = strlen(needle);
-    if (length < needleLen) {
-        return 0;
-    }
-    if (boundary != 0) {
-        uint8_t i = 0;
-        // Check at start of string
-        if (memcmp(haystack, needle, needleLen) == 0) {
-            return 1;
-        }
-        for (i = 0; i < length; i++) {
-            if (haystack[i] == boundary && i + 1 + needleLen <= length) {
-                if (memcmp(haystack + i + 1, needle, needleLen) == 0) {
-                    return 1;
-                }
-            }
-        }
-    } else {
-        uint8_t i;
-        for (i = 0; i + needleLen <= length; i++) {
-            if (memcmp(haystack + i, needle, needleLen) == 0) {
-                return 1;
-            }
-        }
-    }
-    return 0;
-}
-
-/**
- * UtilsSubstrRemove()
- *     Description:
- *         Remove the given substring from the given subject
- *     Params:
- *         char *string - The subject
- *         const char *trash - The substring to remove
- *     Returns:
- *         void
- */
-void UtilsSubstrRemove(char *string, const char *trash)
+void UtilsRemoveSubstring(char *string, const char *trash)
 {
     uint16_t removeLength = strlen(trash);
     while ((string = strstr(string, trash))) {
@@ -374,65 +190,33 @@ void UtilsSubstrRemove(char *string, const char *trash)
     }
 }
 
-/**
- * UtilsReset()
- *     Description:
- *         Reset the MCU
- *     Params:
- *         void
- *     Returns:
- *         void
- */
-void UtilsReset()
+/*void UtilsReset()
 {
     __asm__ volatile("RESET");
-}
+}*/
 
-/**
- * UtilsSetRPORMode()
- *     Description:
- *         Set the mode of a programmable output pin
- *     Params:
- *         uint8_t pin - The pin to set
- *         uint8_t mode - The mode to set the given pin to
- *     Returns:
- *         void
- */
 void UtilsSetRPORMode(uint8_t pin, uint16_t mode)
 {
-    // Prevent writing to memory that does not exist
-    if (pin > UTILS_MAX_RPOR_PIN) {
+    /*if (pin > UTILS_MAX_RPOR_PIN) {
         return;
     }
     uint8_t regNum = 0;
     if (pin > 1) {
         regNum = pin / 2;
     }
-    volatile uint16_t *PROG_PIN = UTILS_GET_RPOR(regNum);
+    volatile uint16_t *PROG_PIN = GET_RPOR(regNum);
     if ((pin % 2) == 0) {
         uint16_t msb = *PROG_PIN >> 8;
-        // Set the least significant bits for the even pin number
         *PROG_PIN = (msb << 8) + mode;
     } else {
         uint16_t lsb = *PROG_PIN & 0xFF;
-        // Set the least significant bits of the register for the odd pin number
         *PROG_PIN = (mode << 8) + lsb;
-    }
+    }*/
 }
 
-/**
- * UtilsSetPinMode()
- *     Description:
- *         Set the pin mode for the given pins
- *     Params:
- *         uint8_t pin - The pin to set
- *         uint8_t mode - The mode to set the given pin to
- *     Returns:
- *         void
- */
 void UtilsSetPinMode(uint8_t pin, uint8_t mode)
 {
-    if (pin == UTILS_PIN_TEL_ON) {
+    /*if (pin == UTILS_PIN_TEL_ON) {
         if (UtilsGetBoardVersion() == BOARD_VERSION_ONE) {
             TEL_ON_V1 = mode;
         } else {
@@ -444,22 +228,9 @@ void UtilsSetPinMode(uint8_t pin, uint8_t mode)
         } else {
             TEL_MUTE_V2 = mode;
         }
-    }
+    }*/
 }
 
-/**
- * UtilsStricmp()
- *     Description:
- *         Case-Insensitive string comparison
- *     Params:
- *         const char *string - The subject
- *         const char *compare - The string to compare the subject against
- *     Returns:
- *         int8_t -
- *             Negative 1 when string is less than compare
- *             Zero when string matches compare
- *             Positive 1 when string is greater than compare
- */
 int8_t UtilsStricmp(const char *string, const char *compare)
 {
     int8_t result;
@@ -470,86 +241,25 @@ int8_t UtilsStricmp(const char *string, const char *compare)
     return result;
 }
 
-/**
- * UtilsStrncpy()
- *     Description:
- *         Safe string copy, that ensures the truncated string is zero-terminated
- *     Params:
- *         char *dest - Destination char buffer
- *         const char *src - Source char buffer
- *         size_t size - Size of destination buffer
- *     Returns:
- *         char * - Pointer to destination string array
- */
 char * UtilsStrncpy(char *dest, const char *src, size_t size)
 {
-    // Size - 1 to avoid copying a character we would just override anyways
     strncpy(dest, src, size - 1);
     dest[size - 1] = '\0';
     return dest;
 }
 
-/**
- * UtilsStrToHex()
- *     Description:
- *         Convert a string to a octal
- *     Params:
- *         char *string - The subject
- *     Returns:
- *         uint8_t The uint8_t
- */
 uint8_t UtilsStrToHex(char *string)
 {
     char *ptr;
     return (uint8_t) strtol(string, &ptr, 16);
 }
 
-/**
- * UtilsStrToInt()
- *     Description:
- *         Convert a string to an integer
- *     Params:
- *         char *string - The subject
- *     Returns:
- *         uint8_t The Unsigned 8-bit integer representation
- */
 uint8_t UtilsStrToInt(char *string)
 {
     char *ptr;
     return (uint8_t) strtol(string, &ptr, 10);
 }
 
-/**
- * UtilsCharIndex()
- *     Description:
- *         Find the first instance of needle in haystack `string`
- *     Params:
- *         char *string - The subject
- *         uint8_t needle - The char to look for
- *     Returns:
- *         int16_t The index of the given needle or -1 for not found
- */
-int16_t UtilsCharIndex(char *string, uint8_t needle)
-{
-    uint16_t i = 0;
-    for (i = 0; i < strlen(string); i++) {
-        if (string[i] == needle) {
-            return i;
-        }
-    }
-    return -1;
-}
-
-/**
- * UtilsTransliterateUnicodeToASCII()
- *     Description:
- *         Transliterates Unicode character to the corresponding ASCII string.
- *         Extend this mapping to add new characters support.
- *     Params:
- *         uint32_t input - Representation of the Unicode character
- *     Returns:
- *         char * - Corresponding Extended ASCII characters
- */
 char * UtilsTransliterateUnicodeToASCII(uint32_t input)
 {
     switch (input) {
@@ -780,16 +490,6 @@ char * UtilsTransliterateUnicodeToASCII(uint32_t input)
     }
 }
 
-/**
- * UtilsTransliterateExtendedASCIIToASCII()
- *     Description:
- *         Converts 192-255 range of extended ASCII symbols to common ASCII symbols
- *         Only for modified nav software.
- *     Params:
- *         uint32_t input - Representation of the Unicode character
- *     Returns:
- *         char * - Corresponding Extended ASCII characters
- */
 char * UtilsTransliterateExtendedASCIIToASCII(uint32_t input)
 {
     switch (input) {
@@ -913,16 +613,6 @@ char * UtilsTransliterateExtendedASCIIToASCII(uint32_t input)
     }
 }
 
-/**
- * UtilsConvertCyrillicUnicodeToExtendedASCII()
- *     Description:
- *         Translates Cyrillic Unicode symbols to the corresponding Extended ASCII symbols (192-255).
- *         Only for modified nav software.
- *     Params:
- *         uint32_t - Representation of the Cyrillic Unicode character
- *     Returns:
- *         uint8_t - Corresponding Extended ASCII characters
- */
 uint8_t UtilsConvertCyrillicUnicodeToExtendedASCII(uint32_t input)
 {
     switch (input) {

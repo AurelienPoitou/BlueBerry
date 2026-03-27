@@ -1,113 +1,67 @@
-#
-#  There exist several targets which are by default empty and which can be 
-#  used for execution of your targets. These targets are usually executed 
-#  before and after some main targets. They are: 
-#
-#     .build-pre:              called before 'build' target
-#     .build-post:             called after 'build' target
-#     .clean-pre:              called before 'clean' target
-#     .clean-post:             called after 'clean' target
-#     .clobber-pre:            called before 'clobber' target
-#     .clobber-post:           called after 'clobber' target
-#     .all-pre:                called before 'all' target
-#     .all-post:               called after 'all' target
-#     .help-pre:               called before 'help' target
-#     .help-post:              called after 'help' target
-#
-#  Targets beginning with '.' are not intended to be called on their own.
-#
-#  Main targets can be executed directly, and they are:
-#  
-#     build                    build a specific configuration
-#     clean                    remove built files from a configuration
-#     clobber                  remove all built files
-#     all                      build all configurations
-#     help                     print help mesage
-#  
-#  Targets .build-impl, .clean-impl, .clobber-impl, .all-impl, and
-#  .help-impl are implemented in nbproject/makefile-impl.mk.
-#
-#  Available make variables:
-#
-#     CND_BASEDIR                base directory for relative paths
-#     CND_DISTDIR                default top distribution directory (build artifacts)
-#     CND_BUILDDIR               default top build directory (object files, ...)
-#     CONF                       name of current configuration
-#     CND_ARTIFACT_DIR_${CONF}   directory of build artifact (current configuration)
-#     CND_ARTIFACT_NAME_${CONF}  name of build artifact (current configuration)
-#     CND_ARTIFACT_PATH_${CONF}  path to build artifact (current configuration)
-#     CND_PACKAGE_DIR_${CONF}    directory of package (current configuration)
-#     CND_PACKAGE_NAME_${CONF}   name of package (current configuration)
-#     CND_PACKAGE_PATH_${CONF}   path to package (current configuration)
-#
-# NOCDDL
+# Compiler and flags
+CC = gcc
+CFLAGS = -g -fcommon -Wall -Wextra -O2 -I. -Ilib -Ihandler -Iui -I/usr/include -I/usr/include/dbus-1.0 -I/usr/lib/aarch64-linux-gnu/dbus-1.0/include -I/usr/include/glib-2.0 -I/usr/lib/aarch64-linux-gnu/glib-2.0/include -march=armv8-a -Wno-unused-parameter -Wno-unused-variable -Wno-unknown-pragmas -Wno-format-truncation -Wno-stringop-truncation
+LDFLAGS = -lbluetooth -ldbus-1 -lglib-2.0 -lgio-2.0 -lgobject-2.0 -lpigpio -lpthread -lrt -lm
 
+# Source files
+SRC = \
+    main.c \
+    handler.c \
+    handler/handler_bt.c \
+    handler/handler_ibus.c \
+    handler/handler_common.c \
+    lib/bt/bt_common.c \
+    lib/bt.c \
+    lib/bt/bt_rpi4.c \
+    lib/char_queue.c \
+    lib/config.c \
+    lib/event.c \
+    lib/ibus.c \
+    lib/locale.c \
+    lib/log.c \
+    lib/timer.c \
+    lib/utils.c \
+    ui/bmbt.c \
+#    ui/cd53.c \
+#    ui/cli.c \
+    ui/mid.c \
+    ui/menu/menu_singleline.c
 
-# Environment 
-MKDIR=mkdir
-CP=cp
-CCADMIN=CCadmin
-RANLIB=ranlib
+# Header files
+HEADERS = \
+    handler.h \
+    mappings.h \
+    sysconfig.h \
+    handler/handler_bt.h \
+    handler/handler_ibus.h \
+    handler/handler_common.h \
+    lib/bt/bt_common.h \
+    lib/bt.h \
+    lib/bt_rpi4.h \
+    lib/char_queue.h \
+    lib/config.h \
+    lib/event.h \
+    lib/ibus.h \
+    lib/locale.h \
+    lib/log.h \
+    lib/timer.h \
+    lib/utils.h \
+    ui/menu/menu_singleline.h \
+    ui/bmbt.h \
+#    ui/cd53.h \
+#    ui/cli.h \
+    ui/mid.h
 
+# Output binary
+OUTPUT = application
 
-# build
-build: .build-post
+# Build rules
+all: $(OUTPUT)
 
-.build-pre:
-# Add your pre 'build' code here...
+$(OUTPUT): $(SRC)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-.build-post: .build-impl
-# Add your post 'build' code here...
+clean:
+	rm -f $(OUTPUT) *.o
 
-
-# clean
-clean: .clean-post
-
-.clean-pre:
-# Add your pre 'clean' code here...
-# WARNING: the IDE does not call this target since it takes a long time to
-# simply run make. Instead, the IDE removes the configuration directories
-# under build and dist directly without calling make.
-# This target is left here so people can do a clean when running a clean
-# outside the IDE.
-
-.clean-post: .clean-impl
-# Add your post 'clean' code here...
-
-
-# clobber
-clobber: .clobber-post
-
-.clobber-pre:
-# Add your pre 'clobber' code here...
-
-.clobber-post: .clobber-impl
-# Add your post 'clobber' code here...
-
-
-# all
-all: .all-post
-
-.all-pre:
-# Add your pre 'all' code here...
-
-.all-post: .all-impl
-# Add your post 'all' code here...
-
-
-# help
-help: .help-post
-
-.help-pre:
-# Add your pre 'help' code here...
-
-.help-post: .help-impl
-# Add your post 'help' code here...
-
-
-
-# include project implementation makefile
-include nbproject/Makefile-impl.mk
-
-# include project make variables
-include nbproject/Makefile-variables.mk
+.PHONY: all clean

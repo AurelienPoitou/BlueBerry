@@ -1,8 +1,11 @@
-/*
- * IO Mappings for the PIC24
- */
 #ifndef IO_MAPPINGS_H
 #define IO_MAPPINGS_H
+
+#include <stdint.h>
+#include <string.h>
+
+// Commenting out non-RPi4 specific features
+/*
 #define IBUS_UART_MODULE 1
 #define IBUS_UART_RX_PRIORITY 7
 #define IBUS_UART_TX_PRIORITY 5
@@ -14,7 +17,6 @@
 #define IBUS_UART_TX_RPIN 3
 #define IBUS_UART_STATUS_MODE TRISDbits.TRISD0
 #define IBUS_UART_STATUS PORTDbits.RD0
-
 
 #define BT_UART_MODULE 2
 #define BT_UART_RX_PRIORITY 6
@@ -36,17 +38,19 @@
 #define SYSTEM_UART_TX_PIN LATDbits.LATD1
 #define SYSTEM_UART_TX_RPIN 24
 
+
 #define EEPROM_SPI_MODULE 1
-#define EEPROM_CS_PIN PORTDbits.RD8
-#define EEPROM_CS_IO_MODE TRISDbits.TRISD8
-#define EEPROM_SCK_RPIN 16
-#define EEPROM_SDI_PIN_MODE TRISDbits.TRISD9
-#define EEPROM_SDI_RPIN 4
-#define EEPROM_SDO_RPIN 30
+#define EEPROM_CS_PIN 8 // Adjust as needed for GPIO pin
+#define EEPROM_CS_IO_MODE 8 // Adjust as needed for GPIO pin
+#define EEPROM_SCK_RPIN 16 // Adjust as needed for GPIO pin
+#define EEPROM_SDI_PIN_MODE 9 // Adjust as needed for GPIO pin
+#define EEPROM_SDI_RPIN 4 // Adjust as needed for GPIO pin
+#define EEPROM_SDO_RPIN 30 // Adjust as needed for GPIO pin
 
 #define BOARD_VERSION_ONE 0
 #define BOARD_VERSION_TWO 1
 
+// Commenting out hardware-specific definitions
 #define BOARD_VERSION_MODE TRISGbits.TRISG8
 #define BOARD_VERSION_STATUS PORTGbits.RG8
 #define BOARD_VERSION_PD IOCPDGbits.IOCPDG8
@@ -107,15 +111,14 @@
 
 #define TEL_MUTE_MODE_V2 TRISFbits.TRISF4
 #define TEL_MUTE_V2 LATFbits.LATF4
+*/
 
-// UI Events
-#define UI_EVENT_INITIATE_CONNECTION 96
-#define UI_EVENT_CLOSE_CONNECTION 97
-#define UI_EVENT_MAIN_DISPLAY_UPDATE 98
+#define UIEvent_InitiateConnection 96
+#define UIEvent_CloseConnection 97
 
 #define FIRMWARE_VERSION_MAJOR 1
-#define FIRMWARE_VERSION_MINOR 4
-#define FIRMWARE_VERSION_PATCH 28
+#define FIRMWARE_VERSION_MINOR 3
+#define FIRMWARE_VERSION_PATCH 4
 
 void TrapWait();
 #endif /* IO_MAPPINGS_H */

@@ -1,13 +1,10 @@
-/*
- * File:   utils.c
- * Author: Ted Salmon <tass2001@gmail.com>
- * Description:
- *     Helper utils that may be useful in more than one place
- */
 #ifndef UTILS_H
 #define UTILS_H
+#include <ctype.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
+#include "config.h"
 
 #define UTILS_CHAR_LATIN_CAPITAL_A_WITH_GRAVE 0xC380
 #define UTILS_CHAR_LATIN_CAPITAL_A_WITH_ACUTE 0xC381
@@ -152,38 +149,15 @@
 #define UTILS_CHAR_LEFT_SINGLE_QUOTATION_MARK 0xE28098
 #define UTILS_CHAR_RIGHT_SINGLE_QUOTATION_MARK 0xE28099
 #define UTILS_CHAR_HORIZONTAL_ELLIPSIS 0xE280A6
-
-#define UTILS_DATETIME_YEAR 0
-#define UTILS_DATETIME_MONTH 1
-#define UTILS_DATETIME_DAY 2
-#define UTILS_DATETIME_HOUR 3
-#define UTILS_DATETIME_MIN 4
-#define UTILS_DATETIME_SEC 5
-
 #define UTILS_MAX_RPOR_PIN 31
 #define UTILS_DISPLAY_TEXT_SIZE 255
 #define UTILS_PIN_TEL_MUTE 0
 #define UTILS_PIN_TEL_ON 1
 
-/* Check if a bit is set in a byte */
-#define UTILS_CHECK_BIT(var, pos) (var & (1 << pos))
-/* Clear a set bit in a byte */
-#define UTILS_CLEAR_BIT(var, pos) ((var) & ~(1 << pos))
-/* Set a bit in a byte */
-#define UTILS_SET_BIT(var, pos) ((var) | (1 << pos))
-/* Return a programmable output port register */
-#define UTILS_GET_RPOR(num) (((uint16_t *) &RPOR0) + num)
-/* Unpack an 8-bit Binary coded decimal */
-#define UTILS_UNPACK_8BCD(bcd) ((bcd & 0x0F) + (10 * (bcd >> 4)))
-/*
- * UtilsAbstractDisplayValue_t
- *  This is a struct to hold text values to be displayed
- *  text: The text to display
- *  index: A variable to track what the last displayed index of text was
- *  length: The length of the text
- *  status: 0 for inactive and 1 for active
- *  timeout: The amount of iterations to display the text for. -1 is indefinite
- */
+#define CHECK_BIT(var, pos) ((var) & (1 <<(pos)))
+#define CLEAR_BIT(var, pos) ((var) & ~(1 << pos))
+#define SET_BIT(var, pos) ((var) | (1 << pos))
+#define GET_RPOR(num) (((uint16_t *) &RPOR0) + num)
 typedef struct UtilsAbstractDisplayValue_t {
     char text[UTILS_DISPLAY_TEXT_SIZE];
     uint8_t index;
@@ -191,23 +165,20 @@ typedef struct UtilsAbstractDisplayValue_t {
     uint8_t status;
     int8_t timeout;
 } UtilsAbstractDisplayValue_t;
-void UtilsCheckRCON();
-uint8_t UtilsConvertCmToIn(uint8_t);
-UtilsAbstractDisplayValue_t UtilsDisplayValueInit(char *, uint8_t);
-uint8_t UtilsGetBoardVersion();
-uint8_t UtilsGetMinByte(uint8_t *, uint8_t);
-uint8_t UtilsGetUnicodeByteLength(uint8_t);
-void UtilsNormalizeText(char *, const char *, uint16_t);
-uint8_t UtilsSubstrExists(const char *, uint8_t, const char *, char);
-void UtilsSubstrRemove(char *, const char *);
+extern uint8_t UtilsConvertCmToIn(uint8_t);
+extern UtilsAbstractDisplayValue_t UtilsDisplayValueInit(char *, uint8_t);
+extern uint8_t UtilsGetBoardVersion();
+extern uint8_t UtilsGetMinByte(uint8_t *, uint8_t);
+extern uint8_t UtilsGetUnicodeByteLength(uint8_t);
+extern void UtilsNormalizeText(char *, const char *, uint16_t);
+extern void UtilsRemoveSubstring(char *, const char *);
 void UtilsReset();
 void UtilsSetRPORMode(uint8_t, uint16_t);
 void UtilsSetPinMode(uint8_t, uint8_t);
-int8_t UtilsStricmp(const char *, const char *);
-char * UtilsStrncpy(char *, const char *, size_t);
-unsigned char UtilsStrToHex(char *);
-uint8_t UtilsStrToInt(char *);
-int16_t UtilsCharIndex(char *, uint8_t);
+extern int8_t UtilsStricmp(const char *, const char *);
+extern char * UtilsStrncpy(char *, const char *, size_t);
+extern unsigned char UtilsStrToHex(char *);
+extern uint8_t UtilsStrToInt(char *);
 char * UtilsTransliterateUnicodeToASCII(uint32_t);
 char * UtilsTransliterateExtendedASCIIToASCII(uint32_t);
 unsigned char UtilsConvertCyrillicUnicodeToExtendedASCII(uint32_t);

@@ -1,39 +1,19 @@
-/*
- * File: mid.c
- * Author: Ted Salmon <tass2001@gmail.com>
- * Description:
- *     Implement the MID UI Mode handler
- */
+#include <stdint.h>
 #include "mid.h"
-#include <stdio.h>
-#include <string.h>
-#include "menu/menu_singleline.h"
-#include "../lib/bt/bt_common.h"
-#include "../lib/bt.h"
-#include "../lib/config.h"
-#include "../lib/event.h"
-#include "../lib/ibus.h"
-#include "../lib/timer.h"
-#include "../lib/utils.h"
 static MIDContext_t Context;
 
 void MIDInit(BT_t *bt, IBus_t *ibus)
 {
-    memset(&Context, 0, sizeof(MIDContext_t));
     Context.bt = bt;
     Context.ibus = ibus;
+    Context.btDeviceIndex = 0;
     Context.mode = MID_MODE_OFF;
     Context.displayUpdate = MID_DISPLAY_NONE;
     Context.mainDisplay = UtilsDisplayValueInit("Bluetooth", MID_DISPLAY_STATUS_OFF);
     Context.tempDisplay = UtilsDisplayValueInit("", MID_DISPLAY_STATUS_OFF);
     Context.modeChangeStatus = MID_MODE_CHANGE_OFF;
-    MenuSingleLineInit(&Context.menuContext, ibus, bt);
+    Context.menuContext = MenuSingleLineInit(ibus, bt, &MIDDisplayUpdateText, &Context);
     memset(Context.mainText, 0x00, 16);
-    EventRegisterCallback(
-        UI_EVENT_MAIN_DISPLAY_UPDATE,
-        &MIDUIDisplayUpdateText,
-        &Context
-    );
     EventRegisterCallback(
         BT_EVENT_DEVICE_LINK_DISCONNECTED,
         &MIDBTDeviceDisconnected,
@@ -50,27 +30,27 @@ void MIDInit(BT_t *bt, IBus_t *ibus)
         &Context
     );
     EventRegisterCallback(
-        IBUS_EVENT_CD_STATUS_REQUEST,
+        IBUS_EVENT_CDStatusRequest,
         &MIDIBusCDChangerStatus,
         &Context
     );
     EventRegisterCallback(
-        IBUS_EVENT_IKE_IGNITION_STATUS,
+        IBUS_EVENT_IKEIgnitionStatus,
         &MIDIBusIgnitionStatus,
         &Context
     );
     EventRegisterCallback(
-        IBUS_EVENT_MID_BUTTON_PRESS,
+        IBUS_EVENT_MIDButtonPress,
         &MIDIBusMIDButtonPress,
         &Context
     );
     EventRegisterCallback(
-        IBUS_EVENT_RAD_MID_DISPLAY_TEXT,
+        IBUS_EVENT_RADMIDDisplayText,
         &MIDIIBusRADMIDDisplayUpdate,
         &Context
     );
     EventRegisterCallback(
-        IBUS_EVENT_MID_MODE_CHANGE,
+        IBUS_EVENT_MIDModeChange,
         &MIDIBusMIDModeChange,
         &Context
     );
@@ -86,15 +66,6 @@ void MIDInit(BT_t *bt, IBus_t *ibus)
     );
 }
 
-/**
- * MIDDestroy()
- *     Description:
- *         Unregister all event handlers, scheduled tasks and clear the context
- *     Params:
- *         void
- *     Returns:
- *         void
- */
 void MIDDestroy()
 {
     EventUnregisterCallback(
@@ -110,28 +81,27 @@ void MIDDestroy()
         &MIDBTPlaybackStatus
     );
     EventUnregisterCallback(
-        IBUS_EVENT_CD_STATUS_REQUEST,
+        IBUS_EVENT_CDStatusRequest,
         &MIDIBusCDChangerStatus
     );
     EventUnregisterCallback(
-        IBUS_EVENT_IKE_IGNITION_STATUS,
+        IBUS_EVENT_IKEIgnitionStatus,
         &MIDIBusIgnitionStatus
     );
     EventUnregisterCallback(
-        IBUS_EVENT_MID_BUTTON_PRESS,
+        IBUS_EVENT_MIDButtonPress,
         &MIDIBusMIDButtonPress
     );
     EventUnregisterCallback(
-        IBUS_EVENT_RAD_MID_DISPLAY_TEXT,
+        IBUS_EVENT_RADMIDDisplayText,
         &MIDIIBusRADMIDDisplayUpdate
     );
     EventUnregisterCallback(
-        IBUS_EVENT_MID_MODE_CHANGE,
+        IBUS_EVENT_MIDModeChange,
         &MIDIBusMIDModeChange
     );
     TimerUnregisterScheduledTask(&MIDTimerMenuWrite);
     TimerUnregisterScheduledTask(&MIDTimerDisplay);
-    MenuSingleLineDestory();
     memset(&Context, 0, sizeof(MIDContext_t));
 }
 
@@ -191,24 +161,52 @@ static void MIDSetTempDisplayText(
     context->tempDisplay.length = strlen(context->tempDisplay.text);
     context->tempDisplay.index = 0;
     context->tempDisplay.status = MID_DISPLAY_STATUS_NEW;
-    // Unlike the main display, we need to set the timeout beforehand, that way
-    // the timer knows how many iterations to display the text for.
     context->tempDisplay.timeout = timeout;
     TimerTriggerScheduledTask(context->displayUpdateTaskId);
 }
 
-static void MIDDisplayOBC(MIDContext_t *context)
+static void MIDShowNextDevice(MIDContext_t *context, uint8_t direction)
 {
-    context->mode = MID_MODE_OBC;
-    MenuSingleLineOBC(&context->menuContext);
-    IBusCommandMIDMenuWriteSingle(context->ibus, MID_BUTTON_OBC, "OBC");
+    if (context->bt->pairedDevicesCount == 0) {
+        MIDSetMainDisplayText(context, "No Devices Available", 0);
+    } else {
+        if (direction == MID_BUTTON_NEXT_VAL) {
+            if (context->btDeviceIndex < context->bt->pairedDevicesCount - 1) {
+                context->btDeviceIndex++;
+            } else {
+                context->btDeviceIndex = 0;
+            }
+        } else {
+            if (context->btDeviceIndex == 0) {
+                context->btDeviceIndex = context->bt->pairedDevicesCount - 1;
+            } else {
+                context->btDeviceIndex--;
+            }
+        }
+        BTPairedDevice_t *dev = &context->bt->pairedDevices[context->btDeviceIndex];
+        char text[16];
+        strncpy(text, dev->deviceName, 15);
+        text[15] = '\0';
+        if (memcmp(dev->macId, context->bt->activeDevice.macId, BT_LEN_MAC_ID) == 0) {
+            uint8_t startIdx = strlen(text);
+            if (startIdx > 13) {
+                startIdx = 13;
+            }
+            text[startIdx++] = 0x20;
+            text[startIdx++] = 0x2A;
+            text[startIdx++] = 0;
+        }
+        MIDSetMainDisplayText(context, text, 0);
+    }
 }
+
 
 static void MIDMenuDevices(MIDContext_t *context)
 {
     context->mode = MID_MODE_DEVICES;
     strncpy(context->mainText, "Devices", 8);
-    MenuSingleLineDevices(&context->menuContext, 0);
+    context->btDeviceIndex = MID_PAIRING_DEVICE_NONE;
+    MIDShowNextDevice(context, 0);
     IBusCommandMIDMenuWriteSingle(context->ibus, MID_BUTTON_BACK, "Back");
     IBusCommandMIDMenuWriteSingle(context->ibus, MID_BUTTON_EDIT_SAVE, " Con");
     IBusCommandMIDMenuWriteSingle(context->ibus, MID_BUTTON_PREV_VAL, "<   ");
@@ -220,11 +218,9 @@ static void MIDMenuDevices(MIDContext_t *context)
 static void MIDMenuMain(MIDContext_t *context)
 {
     context->mode = MID_MODE_ACTIVE;
-    context->displayMetadata = MID_DISPLAY_METADATA_ON;
     memset(context->mainText, 0x00, 16);
     MIDSetMainDisplayText(context, "Bluetooth", 0);
     MIDBTMetadataUpdate((void *) context, 0x00);
-    // This sucks
     unsigned char mainMenuText[] = {
         0x06,
         'M','e','t','a',
@@ -258,24 +254,13 @@ static void MIDMenuSettings(MIDContext_t *context)
     IBusCommandMIDMenuWriteSingle(context->ibus, MID_BUTTON_DEVICES_L, "   ");
 }
 
-/**
- * MIDUIDisplayUpdateText()
- *     Description:
- *         Handle updates from the menu driver
- *     Params:
- *         void *ctx - A void pointer to the MIDContext_t struct
- *         uint8_t *data - The data struct disguised as a pointer
- *     Returns:
- *         void
- */
-void MIDUIDisplayUpdateText(void *ctx, uint8_t *data)
+void MIDDisplayUpdateText(void *ctx, char *text, int8_t timeout, uint8_t updateType)
 {
     MIDContext_t *context = (MIDContext_t *) ctx;
-    MenuSingleLineDisplayUpdate_t *update = (MenuSingleLineDisplayUpdate_t *) data;
-    if (update->type == MENU_SINGLELINE_DISPLAY_UPDATE_MAIN) {
-        MIDSetMainDisplayText(context, update->text, update->timeout);
-    } else if (update->type == MENU_SINGLELINE_DISPLAY_UPDATE_TEMP) {
-        MIDSetTempDisplayText(context, update->text, update->timeout);
+    if (updateType == MENU_SINGLELINE_DISPLAY_UPDATE_MAIN) {
+        MIDSetMainDisplayText(context, text, timeout);
+    } else if (updateType == MENU_SINGLELINE_DISPLAY_UPDATE_TEMP) {
+        MIDSetTempDisplayText(context, text, timeout);
     }
 }
 
@@ -291,11 +276,9 @@ void MIDBTDeviceDisconnected(void *ctx, unsigned char *tmp)
 void MIDBTMetadataUpdate(void *ctx, unsigned char *tmp)
 {
     MIDContext_t *context = (MIDContext_t *) ctx;
-    if (
-        context->mode != MID_MODE_ACTIVE ||
-        context->displayMetadata != MID_DISPLAY_METADATA_ON ||
+    if (context->mode != MID_MODE_ACTIVE ||
         strlen(context->bt->title) == 0 ||
-        ConfigGetSetting(CONFIG_SETTING_METADATA_MODE) == MENU_SINGLELINE_SETTING_METADATA_MODE_OFF
+        ConfigGetSetting(CONFIG_SETTING_METADATA_MODE) == MID_SETTING_METADATA_MODE_OFF
     ) {
         return;
     }
@@ -342,10 +325,7 @@ void MIDBTPlaybackStatus(void *ctx, unsigned char *tmp)
         IBusCommandMIDMenuWriteSingle(context->ibus, 0, "||");
         BTCommandGetMetadata(context->bt);
     } else {
-        if (
-            context->displayMetadata == MID_DISPLAY_METADATA_ON &&
-            ConfigGetSetting(CONFIG_SETTING_METADATA_MODE) != MENU_SINGLELINE_SETTING_METADATA_MODE_OFF
-        ) {
+        if (ConfigGetSetting(CONFIG_SETTING_METADATA_MODE) != MID_SETTING_METADATA_MODE_OFF) {
             MIDSetMainDisplayText(context, "Paused", 0);
         }
         IBusCommandMIDMenuWriteSingle(context->ibus, 0, "> ");
@@ -355,19 +335,17 @@ void MIDBTPlaybackStatus(void *ctx, unsigned char *tmp)
 void MIDIBusCDChangerStatus(void *ctx, unsigned char *pkt)
 {
     MIDContext_t *context = (MIDContext_t *) ctx;
-    unsigned char requestedCommand = pkt[IBUS_PKT_DB1];
+    unsigned char requestedCommand = pkt[4];
     if (requestedCommand == IBUS_CDC_CMD_STOP_PLAYING) {
         if (context->mode != MID_MODE_DISPLAY_OFF &&
             context->mode != MID_MODE_OFF
         ) {
             IBusCommandMIDSetMode(context->ibus, IBUS_DEVICE_TEL, 0x00);
         }
-        // Stop Playing
         context->mode = MID_MODE_OFF;
         context->modeChangeStatus = MID_MODE_CHANGE_OFF;
     } else if (requestedCommand == IBUS_CDC_CMD_START_PLAYING) {
         context->modeChangeStatus = MID_MODE_CHANGE_OFF;
-        // Start Playing
         if (context->mode == MID_MODE_OFF) {
             IBusCommandMIDSetMode(context->ibus, IBUS_DEVICE_TEL, 0x02);
         }
@@ -376,8 +354,6 @@ void MIDIBusCDChangerStatus(void *ctx, unsigned char *pkt)
     ) {
         IBusCommandMIDSetMode(context->ibus, IBUS_DEVICE_TEL, 0x02);
     } else if (requestedCommand == IBUS_CDC_CMD_GET_STATUS) {
-        // Reset the UI if the user has chosen not to
-        // continue with the mode change
         if (context->mode == MID_MODE_DISPLAY_OFF &&
             context->modeChangeStatus == MID_MODE_CHANGE_RELEASE
         ) {
@@ -387,17 +363,6 @@ void MIDIBusCDChangerStatus(void *ctx, unsigned char *pkt)
     }
 }
 
-/**
- * MIDIBusIgnitionStatus()
- *     Description:
- *         Ensure we drop the TEL UI when the igintion is turned off
- *         if the display is still active
- *     Params:
- *         void *ctx - A void pointer to the MIDContext_t struct
- *         uint8_t *pkt - A pointer to the ignition status
- *     Returns:
- *         void
- */
 void MIDIBusIgnitionStatus(void *ctx, uint8_t *pkt)
 {
     MIDContext_t *context = (MIDContext_t *) ctx;
@@ -414,43 +379,31 @@ void MIDIBusIgnitionStatus(void *ctx, uint8_t *pkt)
 void MIDIBusMIDButtonPress(void *ctx, unsigned char *pkt)
 {
     MIDContext_t *context = (MIDContext_t *) ctx;
-    unsigned char btnPressed = pkt[IBUS_PKT_DB3];
+    unsigned char btnPressed = pkt[6];
     if (context->mode == MID_MODE_ACTIVE) {
         if (btnPressed == MID_BUTTON_PLAYBACK) {
             if (context->bt->playbackStatus == BT_AVRCP_STATUS_PLAYING) {
+                BTCommandPause(context->bt);
                 IBusCommandMIDMenuWriteSingle(context->ibus, 0, "> ");
             } else {
+                BTCommandPlay(context->bt);
                 IBusCommandMIDMenuWriteSingle(context->ibus, 0, "||");
             }
-            BTCommandPlaybackToggle(context->bt);
         } else if (btnPressed == MID_BUTTON_META) {
-            // Toggle: Metadata ON -> OFF -> OBC -> ON
-            if (context->displayMetadata == MID_DISPLAY_METADATA_ON) {
-                context->displayMetadata = MID_DISPLAY_METADATA_OFF;
-                MIDSetMainDisplayText(context, "Bluetooth", 0);
-                MenuSingleLineSetUIView(&context->menuContext, MENU_SINGLELINE_VIEW_METADATA);
-            } else if (context->displayMetadata == MID_DISPLAY_METADATA_OFF) {
-                context->displayMetadata = MID_DISPLAY_OBC;
-                context->mode = MID_MODE_OBC_NEW;
-                MenuSingleLineSetUIView(&context->menuContext, MENU_SINGLELINE_VIEW_OBC);
+            if (context->mode == MID_MODE_ACTIVE) {
+                context->mode = MID_MODE_DISPLAY_OFF;
             } else {
-                // OBC -> back to Metadata ON
-                context->displayMetadata = MID_DISPLAY_METADATA_ON;
-                MenuSingleLineSetUIView(&context->menuContext, MENU_SINGLELINE_VIEW_METADATA);
                 context->mode = MID_MODE_ACTIVE_NEW;
             }
-        } else if (
-            btnPressed == MID_BUTTON_SETTINGS_L ||
-            btnPressed == MID_BUTTON_SETTINGS_R
+        } else if (btnPressed == MID_BUTTON_SETTINGS_L ||
+                   btnPressed == MID_BUTTON_SETTINGS_R
         ) {
             context->mode = MID_MODE_SETTINGS_NEW;
-        }  else if (
-            btnPressed == MID_BUTTON_DEVICES_L ||
-            btnPressed == MID_BUTTON_DEVICES_R
+        }  else if (btnPressed == MID_BUTTON_DEVICES_L ||
+                    btnPressed == MID_BUTTON_DEVICES_R
         ) {
             context->mode = MID_MODE_DEVICES_NEW;
         } else if (btnPressed == MID_BUTTON_PAIR) {
-            // Toggle the discoverable state
             uint8_t state;
             int8_t timeout = 1500 / MID_DISPLAY_SCROLL_SPEED;
             if (context->bt->discoverable == BT_STATE_ON) {
@@ -460,8 +413,7 @@ void MIDIBusMIDButtonPress(void *ctx, unsigned char *pkt)
                 MIDSetTempDisplayText(context, "Pairing On", timeout);
                 state = BT_STATE_ON;
                 if (context->bt->activeDevice.deviceId != 0) {
-                    // To pair a new device, we must disconnect the active one
-                    EventTriggerCallback(UI_EVENT_CLOSE_CONNECTION, 0x00);
+                    EventTriggerCallback(UIEvent_CloseConnection, 0x00);
                 }
             }
             BTCommandSetDiscoverable(context->bt, state);
@@ -490,22 +442,24 @@ void MIDIBusMIDButtonPress(void *ctx, unsigned char *pkt)
         if (btnPressed == MID_BUTTON_BACK) {
             context->mode = MID_MODE_ACTIVE_NEW;
         } else if (btnPressed == MID_BUTTON_EDIT_SAVE) {
-            MenuSingleLineDevicesConnect(&context->menuContext);
-        } else if (
-            btnPressed == MID_BUTTON_PREV_VAL ||
-            btnPressed == MID_BUTTON_NEXT_VAL
+            if (context->bt->pairedDevicesCount > 0) {
+                BTPairedDevice_t *dev = &context->bt->pairedDevices[context->btDeviceIndex];
+                if (memcmp(dev->macId, context->bt->activeDevice.macId, BT_LEN_MAC_ID) != 0 &&
+                    dev != 0
+                ) {
+                    EventTriggerCallback(
+                        UIEvent_InitiateConnection,
+                        (uint8_t *)&context->btDeviceIndex
+                    );
+                }
+            }
+        } else if (btnPressed == MID_BUTTON_PREV_VAL ||
+                   btnPressed == MID_BUTTON_NEXT_VAL
         ) {
-            MenuSingleLineDevices(&context->menuContext, btnPressed);
-        }
-    } else if (context->mode == MID_MODE_OBC) {
-        if (btnPressed == MID_BUTTON_BACK) {
-            context->displayMetadata = MID_DISPLAY_METADATA_ON;
-            MenuSingleLineSetUIView(&context->menuContext, MENU_SINGLELINE_VIEW_METADATA);
-            context->mode = MID_MODE_ACTIVE_NEW;
+            MIDShowNextDevice(context, btnPressed);
         }
     }
     if (btnPressed == MID_BUTTON_MODE && pkt[IBUS_PKT_DST] == IBUS_DEVICE_TEL) {
-        // Close TEL UI
         IBusCommandMIDSetMode(context->ibus, IBUS_DEVICE_TEL, 0x00);
         context->modeChangeStatus = MID_MODE_CHANGE_PRESS;
     }
@@ -516,15 +470,13 @@ void MIDIBusMIDButtonPress(void *ctx, unsigned char *pkt)
         IBusCommandMIDButtonPress(context->ibus, IBUS_DEVICE_RAD, MID_BUTTON_MODE_RELEASE);
         context->modeChangeStatus = MID_MODE_CHANGE_OFF;
     }
-    // Handle Next and Previous
     if (context->ibus->cdChangerFunction != IBUS_CDC_FUNC_NOT_PLAYING) {
-        if (btnPressed == IBUS_MID_BTN_TEL_RIGHT_RELEASE) {
+        if (btnPressed == IBus_MID_BTN_TEL_RIGHT_RELEASE) {
             BTCommandPlaybackTrackNext(context->bt);
-        } else if (btnPressed == IBUS_MID_BTN_TEL_LEFT_RELEASE) {
+        } else if (btnPressed == IBus_MID_BTN_TEL_LEFT_RELEASE) {
             BTCommandPlaybackTrackPrevious(context->bt);
         }
     }
-    // Hijack the "TAPE/CD/MD" button
     if (ConfigGetSetting(CONFIG_SETTING_SELF_PLAY) == CONFIG_SETTING_ON) {
         if (btnPressed == MID_BUTTON_BT || btnPressed == MID_BUTTON_MODE) {
             IBusCommandRADCDCRequest(context->ibus, IBUS_CDC_CMD_START_PLAYING);
@@ -532,41 +484,20 @@ void MIDIBusMIDButtonPress(void *ctx, unsigned char *pkt)
     }
 }
 
-/**
- * MIDIIBusRADMIDDisplayUpdate()
- *     Description:
- *         Handle the RAD writing to the MID.
- *     Params:
- *         void *context - A void pointer to the MIDContext_t struct
- *         unsigned char *pkt - The IBus packet
- *     Returns:
- *         void
- */
 void MIDIIBusRADMIDDisplayUpdate(void *ctx, unsigned char *pkt)
 {
     MIDContext_t *context = (MIDContext_t *) ctx;
     unsigned char watermark = pkt[pkt[IBUS_PKT_LEN]];
-    if (watermark == IBUS_RAD_MAIN_AREA_WATERMARK) {
-        return;
-    }
-    if (
-        (context->mode == MID_MODE_ACTIVE || context->mode == MID_MODE_DISPLAY_OFF) &&
-        context->modeChangeStatus == MID_MODE_CHANGE_OFF
-    ) {
-        IBusCommandMIDDisplayRADTitleText(context->ibus, "Bluetooth");
+    if (watermark != IBUS_RAD_MAIN_AREA_WATERMARK) {
+        if ((context->mode == MID_MODE_ACTIVE ||
+             context->mode == MID_MODE_DISPLAY_OFF) &&
+            context->modeChangeStatus == MID_MODE_CHANGE_OFF
+        ) {
+            IBusCommandMIDDisplayRADTitleText(context->ibus, "Bluetooth");
+        }
     }
 }
 
-/**
- * MIDIBusMIDModeChange()
- *     Description:
- *
- *     Params:
- *         void *context - A void pointer to the MIDContext_t struct
- *         unsigned char *pkt - The IBus packet
- *     Returns:
- *         void
- */
 void MIDIBusMIDModeChange(void *ctx, unsigned char *pkt)
 {
     MIDContext_t *context = (MIDContext_t *) ctx;
@@ -588,8 +519,7 @@ void MIDIBusMIDModeChange(void *ctx, unsigned char *pkt)
         } else if (context->mode != MID_MODE_OFF) {
             context->mode = MID_MODE_DISPLAY_OFF;
         }
-        if (
-            pkt[IBUS_PKT_DB2] == IBUS_MID_UI_RADIO_OPEN &&
+        if (pkt[IBUS_PKT_DB2] == IBUS_MID_UI_RADIO_OPEN &&
             context->modeChangeStatus == MID_MODE_CHANGE_PRESS
         ) {
             IBusCommandMIDButtonPress(context->ibus, IBUS_DEVICE_RAD, MID_BUTTON_MODE_PRESS);
@@ -602,7 +532,6 @@ void MIDIBusMIDModeChange(void *ctx, unsigned char *pkt)
             IBusCommandMIDMenuWriteSingle(context->ibus, MID_BUTTON_BT, "BT");
         }
     } else {
-        // This should be 0x8F, which is "close TEL UI"
         if (ConfigGetSetting(CONFIG_SETTING_SELF_PLAY) == CONFIG_SETTING_ON) {
             IBusCommandRADCDCRequest(context->ibus, IBUS_CDC_CMD_STOP_PLAYING);
         }
@@ -622,9 +551,6 @@ void MIDTimerMenuWrite(void *ctx)
         case MID_MODE_DEVICES_NEW:
             MIDMenuDevices(context);
             break;
-        case MID_MODE_OBC_NEW:
-            MIDDisplayOBC(context);
-            break;
     }
 }
 
@@ -637,7 +563,6 @@ void MIDTimerDisplay(void *ctx)
     ) {
         return;
     }
-    // Display the temp text, if there is any
     if (context->tempDisplay.status > MID_DISPLAY_STATUS_OFF) {
         if (context->tempDisplay.timeout == 0) {
             context->tempDisplay.status = MID_DISPLAY_STATUS_OFF;
@@ -653,26 +578,22 @@ void MIDTimerDisplay(void *ctx)
             );
             context->tempDisplay.status = MID_DISPLAY_STATUS_ON;
         }
-        if (context->mainDisplay.length <= IBUS_MID_MAX_CHARS) {
+        if (context->mainDisplay.length <= IBus_MID_MAX_CHARS) {
             context->mainDisplay.index = 0;
         }
     } else {
-        // Display the main text if there isn't a timeout set
         if (context->mainDisplay.timeout > 0) {
             context->mainDisplay.timeout--;
         } else {
-            if (context->mainDisplay.length > IBUS_MID_MAX_CHARS) {
-                char text[IBUS_MID_MAX_CHARS + 1] = {0};
-                uint8_t textLength = IBUS_MID_MAX_CHARS;
-                // If we start with a space, it will be ignored by the display
-                // Skipping the space allows us to have "smooth" scrolling
+            if (context->mainDisplay.length > IBus_MID_MAX_CHARS) {
+                char text[IBus_MID_MAX_CHARS + 1] = {0};
+                uint8_t textLength = IBus_MID_MAX_CHARS;
                 if (context->mainDisplay.text[context->mainDisplay.index] == 0x20 &&
                     context->mainDisplay.index < context->mainDisplay.length
                 ) {
                     context->mainDisplay.index++;
                 }
                 uint8_t idxEnd = context->mainDisplay.index + textLength;
-                // Prevent strncpy() from going out of bounds
                 if (idxEnd >= context->mainDisplay.length) {
                     textLength = context->mainDisplay.length - context->mainDisplay.index;
                     idxEnd = context->mainDisplay.index + textLength;
@@ -683,21 +604,18 @@ void MIDTimerDisplay(void *ctx)
                     textLength + 1
                 );
                 IBusCommandMIDDisplayText(context->ibus, text);
-                // Pause at the beginning of the text
                 if (context->mainDisplay.index == 0) {
                     context->mainDisplay.timeout = 5;
                 }
                 if (idxEnd >= context->mainDisplay.length) {
-                    // Pause at the end of the text
                     context->mainDisplay.timeout = 2;
                     context->mainDisplay.index = 0;
                 } else {
-                    if (
-                        ConfigGetSetting(CONFIG_SETTING_METADATA_MODE) ==
-                        MENU_SINGLELINE_SETTING_METADATA_MODE_CHUNK
+                    if (ConfigGetSetting(CONFIG_SETTING_METADATA_MODE) ==
+                        MID_SETTING_METADATA_MODE_CHUNK
                     ) {
                         context->mainDisplay.timeout = 2;
-                        context->mainDisplay.index += IBUS_MID_MAX_CHARS;
+                        context->mainDisplay.index += IBus_MID_MAX_CHARS;
                     } else {
                         context->mainDisplay.index++;
                     }

@@ -1,39 +1,26 @@
-/*
- * File: menu_singleline.h
- * Author: Ted Salmon <tass2001@gmail.com>
- * Description:
- *     Implement the shared single line Settings Menu
- */
+#include <stdint.h>
 #ifndef MENU_SINGLELINE_H
 #define MENU_SINGLELINE_H
 
-#include "../../lib/bt/bt_common.h"
+#include "../../lib/bt.h"
+#include "../../lib/config.h"
 #include "../../lib/ibus.h"
-#include "../../lib/pcm51xx.h"
 #include "../../lib/utils.h"
-
-#define MENU_SINGLELINE_VIEW_OFF 0
-#define MENU_SINGLELINE_VIEW_METADATA 1
-#define MENU_SINGLELINE_VIEW_OBC 2
-#define MENU_SINGLELINE_VIEW_SETTINGS 3
-#define MENU_SINGLELINE_VIEW_DEVICES 4
 
 #define MENU_SINGLELINE_SETTING_IDX_METADATA_MODE 0
 #define MENU_SINGLELINE_SETTING_IDX_AUTOPLAY 1
 #define MENU_SINGLELINE_SETTING_IDX_AUDIO_DSP 2
 #define MENU_SINGLELINE_SETTING_IDX_LOWER_VOL_REV 3
-#define MENU_SINGLELINE_SETTING_IDX_AUDIO_DAC_GAIN 4
-#define MENU_SINGLELINE_SETTING_IDX_TEL_HFP 5
-#define MENU_SINGLELINE_SETTING_IDX_TEL_MIC_GAIN 6
-#define MENU_SINGLELINE_SETTING_IDX_TEL_VOL_OFFSET 7
-#define MENU_SINGLELINE_SETTING_IDX_TEL_TCU_MODE 8
-#define MENU_SINGLELINE_SETTING_IDX_BLINKERS 9
-#define MENU_SINGLELINE_SETTING_IDX_PARK_LIGHTS 10
-#define MENU_SINGLELINE_SETTING_IDX_COMFORT_LOCKS 11
-#define MENU_SINGLELINE_SETTING_IDX_COMFORT_UNLOCK 12
-#define MENU_SINGLELINE_SETTING_IDX_VISUAL_PDC 13
-#define MENU_SINGLELINE_SETTING_IDX_ABOUT 14
-#define MENU_SINGLELINE_SETTING_IDX_PAIRINGS 15
+#define MENU_SINGLELINE_SETTING_IDX_TEL_HFP 4
+#define MENU_SINGLELINE_SETTING_IDX_TEL_MIC_GAIN 5
+#define MENU_SINGLELINE_SETTING_IDX_TEL_VOL_OFFSET 6
+#define MENU_SINGLELINE_SETTING_IDX_TEL_TCU_MODE 7
+#define MENU_SINGLELINE_SETTING_IDX_BLINKERS 8
+#define MENU_SINGLELINE_SETTING_IDX_PARK_LIGHTS 9
+#define MENU_SINGLELINE_SETTING_IDX_COMFORT_LOCKS 10
+#define MENU_SINGLELINE_SETTING_IDX_COMFORT_UNLOCK 11
+#define MENU_SINGLELINE_SETTING_IDX_ABOUT 12
+#define MENU_SINGLELINE_SETTING_IDX_PAIRINGS 13
 
 #define MENU_SINGLELINE_SETTING_MODE_SCROLL_SETTINGS 1
 #define MENU_SINGLELINE_SETTING_MODE_SCROLL_VALUES 2
@@ -47,45 +34,23 @@
 #define MENU_SINGLELINE_DISPLAY_UPDATE_MAIN 0
 #define MENU_SINGLELINE_DISPLAY_UPDATE_TEMP 1
 
-#define MENU_SINGLELINE_DIRECTION_FORWARD 0
-#define MENU_SINGLELINE_DIRECTION_BACK 1
-
-/*
- *
- */
-typedef struct MenuSingleLineDisplayUpdate_t {
-    char text[UTILS_DISPLAY_TEXT_SIZE];
-    int8_t timeout;
-    uint8_t type;
-} MenuSingleLineDisplayUpdate_t;
-
-/*
- * MenuSingleLineContext_t
- */
 typedef struct MenuSingleLineContext_t {
     IBus_t *ibus;
     BT_t *bt;
-    uint8_t uiMode;
-    uint8_t activeView;
+    void (*uiUpdateFunc)(void *, const char *, int8_t, uint8_t);
+    void *uiContext;
     uint8_t settingIdx;
     uint8_t settingValue;
     uint8_t settingMode;
-    uint8_t btDeviceIndex;
-    uint16_t vehicleSpeed;
+    uint8_t uiMode;
 } MenuSingleLineContext_t;
 
-void MenuSingleLineInit(MenuSingleLineContext_t *, IBus_t *, BT_t*);
-void MenuSingleLineDestory();
-void MenuSingleLineSetDisplayText(MenuSingleLineContext_t *, const char *, int8_t, uint8_t);
-void MenuSingleLineIBusSensorValueUpdate(void *, uint8_t *);
-void MenuSingleLineIBusSpeedUpdate(void *, uint8_t *);
-void MenuSingleLineOBC(MenuSingleLineContext_t *);
-void MenuSingleLineSetUIView(MenuSingleLineContext_t *, uint8_t);
+MenuSingleLineContext_t MenuSingleLineInit(IBus_t *, BT_t*, void *, void *);
+void MenuSingleLineMainDisplayText(MenuSingleLineContext_t *, const char *, int8_t);
+void MenuSingleLineSetTempDisplayText(MenuSingleLineContext_t *, const char *, int8_t);
 void MenuSingleLineSettings(MenuSingleLineContext_t *);
 void MenuSingleLineSettingsEditSave(MenuSingleLineContext_t *);
 void MenuSingleLineSettingsScroll(MenuSingleLineContext_t *, uint8_t);
 void MenuSingleLineSettingsNextSetting(MenuSingleLineContext_t *, uint8_t);
 void MenuSingleLineSettingsNextValue(MenuSingleLineContext_t *, uint8_t);
-void MenuSingleLineDevices(MenuSingleLineContext_t *, uint8_t);
-void MenuSingleLineDevicesConnect(MenuSingleLineContext_t *);
 #endif /* MENU_SINGLELINE_H */

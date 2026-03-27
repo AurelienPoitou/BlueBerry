@@ -1,32 +1,13 @@
-/*
- * File: handler_common.h
- * Author: Ted Salmon <tass2001@gmail.com>
- * Description:
- *     Shared structs, defines and functions for the Handlers
- */
+#include <stdint.h>
 #include "handler_common.h"
-#include "../lib/config.h"
-#include "../lib/log.h"
 
-/**
- * HandlerGetTelMode()
- *     Description:
- *         Determine the appropriate TEL mode based on the current vehicle
- *         configuration
- *     Params:
- *         HandlerContext_t *context - The module context
- *     Returns:
- *         uint8_t - The TEL mode to use
- */
 uint8_t HandlerGetTelMode(HandlerContext_t *context)
 {
+    uint8_t dspMode = ConfigGetSetting(CONFIG_SETTING_DSP_INPUT_SRC);
     uint8_t telMode = ConfigGetSetting(CONFIG_SETTING_TEL_MODE);
-    if (
-        context->ibus->cdChangerFunction == IBUS_CDC_FUNC_PLAYING &&
-        (
-            telMode == CONFIG_SETTING_TEL_MODE_DEFAULT ||
-            telMode == CONFIG_SETTING_TEL_MODE_ANALOG
-        )
+    if ((context->ibus->cdChangerFunction == IBUS_CDC_FUNC_PLAYING ||
+        (dspMode == CONFIG_SETTING_DSP_INPUT_SPDIF && context->ibus->moduleStatus.DSP == 1)) &&
+        telMode == CONFIG_SETTING_TEL_MODE_DEFAULT
     ) {
         return HANDLER_TEL_MODE_AUDIO;
     } else {
@@ -34,17 +15,6 @@ uint8_t HandlerGetTelMode(HandlerContext_t *context)
     }
 }
 
-/**
- * HandlerSetIBusTELStatus()
- *     Description:
- *         Send the TEL status to the vehicle
- *     Params:
- *         HandlerContext_t *context - The module context
- *         unsigned char sendFlag - Weather to update the status only if it is
- *             different, or force broadcasting it.
- *     Returns:
- *         uint8_t - Returns 1 if the status has changed, zero otherwise
- */
 uint8_t HandlerSetIBusTELStatus(
     HandlerContext_t *context,
     unsigned char sendFlag
@@ -60,8 +30,6 @@ uint8_t HandlerSetIBusTELStatus(
             sendFlag == HANDLER_TEL_STATUS_FORCE
         ) {
             context->telStatus = currentTelStatus;
-            // Do not set the active call flag for these UIs to allow
-            // the radio volume controls to remain active
             if (currentTelStatus == IBUS_TEL_STATUS_ACTIVE_POWER_CALL_HANDSFREE &&
                 (
                     context->uiMode == CONFIG_UI_CD53 ||
@@ -80,43 +48,22 @@ uint8_t HandlerSetIBusTELStatus(
     return 0;
 }
 
-/**
- * HandlerSetVolume()
- *     Description:
- *         Abstract function to change the vehicle volume
- *     Params:
- *         HandlerContext_t *context - The handler context
- *         uint8_t direction - Lower / Raise volume flag
- *     Returns:
- *         void
- */
 void HandlerSetVolume(HandlerContext_t *context, uint8_t direction)
 {
-    uint8_t i = 0;
-    LogDebug(
-        LOG_SOURCE_SYSTEM,
-        "Set Vol: %s",
-        (direction == HANDLER_VOLUME_DIRECTION_DOWN) ? "Down" : "Up"
-    );
+    uint8_t newVolume = 0;
     if (direction == HANDLER_VOLUME_DIRECTION_DOWN) {
-        for (i = 0; i < HANDLER_VOLUME_STEPS; i++) {
-            IBusCommandSetVolume(
-                context->ibus,
-                IBUS_DEVICE_MFL,
-                IBUS_DEVICE_RAD,
-                IBUS_RAD_VOLUME_DOWN
-            );
-        }
+        newVolume = context->bt->activeDevice.a2dpVolume / 2;
         context->volumeMode = HANDLER_VOLUME_MODE_LOWERED;
     } else {
-        for (i = 0; i < HANDLER_VOLUME_STEPS; i++) {
-            IBusCommandSetVolume(
-                context->ibus,
-                IBUS_DEVICE_MFL,
-                IBUS_DEVICE_RAD,
-                IBUS_RAD_VOLUME_UP
-            );
-        }
+        newVolume = context->bt->activeDevice.a2dpVolume * 2;
         context->volumeMode = HANDLER_VOLUME_MODE_NORMAL;
     }
+    char hexVolString[3] = {0};
+    snprintf(hexVolString, 3, "%X", newVolume / 8);
+/*    BC127CommandVolume(
+        context->bt,
+        context->bt->activeDevice.a2dpId,
+        hexVolString
+    );*/
+    context->bt->activeDevice.a2dpVolume = newVolume;
 }

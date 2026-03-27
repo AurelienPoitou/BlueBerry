@@ -1,14 +1,9 @@
-/*
- * File: event.h
- * Author: Ted Salmon <tass2001@gmail.com>
- * Description:
- *     Implement an event system so that modules can interact with each other
- */
+#include <stdint.h>
 #ifndef EVENT_H
 #define EVENT_H
-#define EVENT_MAX_CALLBACKS 128
+#define EVENT_MAX_CALLBACKS 192
 #include <stdint.h>
-
+#include <string.h>
 typedef struct Event_t {
     uint8_t type;
     void *context;

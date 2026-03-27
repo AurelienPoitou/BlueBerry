@@ -6,16 +6,21 @@
  */
 #ifndef BMBT_H
 #define BMBT_H
-#include "../lib/bt/bt_common.h"
+#include <stdio.h>
+#include "../lib/bt/bt_rpi4.h"
+#include "../lib/bt.h"
+#include "../lib/config.h"
+#include "../lib/event.h"
 #include "../lib/ibus.h"
+#include "../lib/locale.h"
+#include "../lib/timer.h"
 #include "../lib/utils.h"
-
 #define BMBT_DISPLAY_OFF 0x00
-#define BMBT_DISPLAY_TONE_INFO 0x01
-#define BMBT_DISPLAY_SEL 0x02
+#define BMBT_DISPLAY_TONE_SEL_INFO 0x01
+#define BMBT_DISPLAY_REVERSE_CAM 0x02
 #define BMBT_DISPLAY_ON 0x03
 #define BMBT_DISPLAY_TEXT_LEN 9
-#define BMBT_HEADER_SPEED 1
+#define BMBT_HEADER_BT 1
 #define BMBT_HEADER_PB_STAT 2
 #define BMBT_HEADER_TEMPS 5
 #define BMBT_HEADER_DEV_NAME 6
@@ -29,9 +34,7 @@
 #define BMBT_MENU_SETTINGS_AUDIO 6
 #define BMBT_MENU_SETTINGS_COMFORT 7
 #define BMBT_MENU_SETTINGS_CALLING 8
-#define BMBT_MENU_SETTINGS_NAV 9
-#define BMBT_MENU_SETTINGS_TIME 10
-#define BMBT_MENU_SETTINGS_UI 11
+#define BMBT_MENU_SETTINGS_UI 9
 #define BMBT_MENU_IDX_BACK 7
 #define BMBT_MENU_IDX_DASHBOARD 0
 #define BMBT_MENU_IDX_DEVICE_SELECTION 1
@@ -40,9 +43,7 @@
 #define BMBT_MENU_IDX_SETTINGS_AUDIO 1
 #define BMBT_MENU_IDX_SETTINGS_CALLING 2
 #define BMBT_MENU_IDX_SETTINGS_COMFORT 3
-#define BMBT_MENU_IDX_SETTINGS_NAV 4
-#define BMBT_MENU_IDX_SETTINGS_TIME 5
-#define BMBT_MENU_IDX_SETTINGS_UI 6
+#define BMBT_MENU_IDX_SETTINGS_UI 4
 /* About Menu */
 #define BMBT_MENU_IDX_SETTINGS_ABOUT_FW_VERSION 0
 #define BMBT_MENU_IDX_SETTINGS_ABOUT_BUILD_DATE 1
@@ -51,7 +52,8 @@
 #define BMBT_MENU_IDX_SETTINGS_AUDIO_AUTOPLAY 0
 #define BMBT_MENU_IDX_SETTINGS_AUDIO_DAC_GAIN 1
 #define BMBT_MENU_IDX_SETTINGS_AUDIO_DSP_INPUT 2
-#define BMBT_MENU_IDX_SETTINGS_AUDIO_REV_VOL 3
+#define BMBT_MENU_IDX_SETTINGS_AUDIO_MANAGE_VOL 3
+#define BMBT_MENU_IDX_SETTINGS_AUDIO_REV_VOL 4
 /* Call Settings */
 #define BMBT_MENU_IDX_SETTINGS_CALLING_HFP 0
 #define BMBT_MENU_IDX_SETTINGS_CALLING_MIC_GAIN 1
@@ -62,18 +64,7 @@
 #define BMBT_MENU_IDX_SETTINGS_COMFORT_UNLOCK 1
 #define BMBT_MENU_IDX_SETTINGS_COMFORT_BLINKERS 2
 #define BMBT_MENU_IDX_SETTINGS_COMFORT_PARKING_LAMPS 3
-#define BMBT_MENU_IDX_SETTINGS_COMFORT_VISUAL_PDC 4
-/* Navigation Settings */
-#define BMBT_MENU_IDX_SETTINGS_NAV_AUTOZOOM 0
-#define BMBT_MENU_IDX_SETTINGS_NAV_MAP 1
-#define BMBT_MENU_IDX_SETTINGS_NAV_RANGE 2
-#define BMBT_MENU_IDX_SETTINGS_NAV_SILENT 3
-/* Time Settings */
-#define BMBT_MENU_IDX_SETTINGS_TIME_SOURCE 0
-#define BMBT_MENU_IDX_SETTINGS_TIME_DST 1
-#define BMBT_MENU_IDX_SETTINGS_TIME_OFFSET 2
-#define BMBT_MENU_IDX_SETTINGS_TIME_GPSDATE 4
-#define BMBT_MENU_IDX_SETTINGS_TIME_GPSTIME 5
+#define BMBT_MENU_IDX_SETTINGS_COMFORT_AUTOZOOM 4
 /* UI Settings */
 #define BMBT_MENU_IDX_SETTINGS_UI_DEFAULT_MENU 0
 #define BMBT_MENU_IDX_SETTINGS_UI_METADATA_MODE 1
@@ -81,110 +72,64 @@
 #define BMBT_MENU_IDX_SETTINGS_IU_DASH_OBC 3
 #define BMBT_MENU_IDX_SETTINGS_UI_MONITOR_OFF 4
 #define BMBT_MENU_IDX_SETTINGS_UI_LANGUAGE 5
-#define BMBT_MENU_IDX_SETTINGS_UI_TRUE_SPEED 6
-
-#define BMBT_TEL_STATE_NONE 0
-#define BMBT_TEL_STATE_DIAL 1
-#define BMBT_TEL_STATE_DIRECTORY 2
-#define BMBT_TEL_STATE_TOP_8 3
-#define BMBT_TEL_STATE_LAST_DIALED 4
-#define BMBT_TEL_STATE_NUMBER_SELECT 5
-
-#define BMBT_TEL_PAGE_SIZE 8
-
-#define BMBT_TEL_DIGIT_BACKSPACE 0x0A
-#define BMBT_TEL_DIGIT_STAR 0x1A
-#define BMBT_TEL_DIGIT_HASH 0x1B
-#define BMBT_TEL_NAV_BACK_TO_DIAL 0x1E
-#define BMBT_TEL_NAV_OPEN_DIRECTORY 0x1F
-#define BMBT_TEL_NAV_PREV 0x0C
-#define BMBT_TEL_NAV_NEXT 0x0D
-
-#define BMBT_NO_FORCE 0
-#define BMBT_FORCE 1
 
 #define BMBT_MENU_BUFFER_OK 0
 #define BMBT_MENU_BUFFER_FLUSH 1
-
-#define BMBT_MENU_STATE_REL 0
-#define BMBT_MENU_STATE_PRESS 1
 
 #define BMBT_MAIN_AREA_LEN 9
 #define BMBT_MENU_IDX_PAIRING_MODE 0
 #define BMBT_MENU_IDX_CLEAR_PAIRING 1
 #define BMBT_MENU_IDX_FIRST_DEVICE 2
+#define BMBT_MENU_WRITE_DELAY 300
 #define BMBT_MENU_TIMER_WRITE_INT 100
 #define BMBT_MENU_TIMER_WRITE_TIMEOUT 500
 #define BMBT_HEADER_TIMER_WRITE_INT 100
 #define BMBT_HEADER_TIMER_WRITE_TIMEOUT 500
-#define BMBT_MENU_HEADER_TIMER_OFF 0xFF
-
-#define BMBT_MENU_SELECT_TIMER_OFF 0x07
-#define BMBT_MENU_SELECT_TIMER_INT 75
-#define BMBT_MENU_SELECT_TIMER_TIMEOUT 3
-
-#define BMBT_MENU_STRING_MAX_SIZE 16
+#define BMBT_MENU_HEADER_TIMER_OFF 255
+/* 23 + 1 for null terminator */
+#define BMBT_MENU_STRING_MAX_SIZE 24
 #define BMBT_METADATA_MODE_OFF 0x00
 #define BMBT_METADATA_MODE_PARTY 0x01
 #define BMBT_METADATA_MODE_CHUNK 0x02
 #define BMBT_MODE_INACTIVE 0
 #define BMBT_MODE_ACTIVE 1
-#define BMBT_RAD_DISPLAY_STATUS_OFF 0
-#define BMBT_RAD_DISPLAY_STATUS_ON 1
 #define BMBT_NAV_BOOT 0x10
 #define BMBT_NAV_STATE_BOOT 0x00
 #define BMBT_NAV_STATE_ON 0x01
+#define BMBT_SCROLL_TEXT_SIZE 255
+#define BMBT_SCROLL_TEXT_SPEED 750
 #define BMBT_SCROLL_TEXT_TIMER 500
-#define BMBT_VIDEO_SOURCE_INTERNAL 0
-#define BMBT_VIDEO_SOURCE_EXTERNAL 1
+#define BMBT_TV_STATUS_OFF 0
+#define BMBT_TV_STATUS_ON 1
 
 #define BMBT_AUTOZOOM_TOLERANCE 4
 #define BMBT_AUTOZOOM_DELAY 10000
-
-typedef struct BMBTTELStatus_t {
-    uint8_t state: 3;
-    uint8_t contactIdx: 4;
-    uint8_t numberIdx: 2;
-    uint8_t phonebookType: 3;
-    uint8_t page;
-} BMBTTELStatus_t;
 
 typedef struct BMBTStatus_t {
     uint8_t playerMode: 1;
     uint8_t displayMode: 2;
     uint8_t navState: 1;
     uint8_t radType: 4;
-    uint8_t videoSource: 1;
-    uint8_t headerBufferStatus: 1;
+    uint8_t tvStatus: 1;
     uint8_t menuBufferStatus: 1;
-    uint8_t radioDisplayStatus: 1;
-    uint8_t screenCleared: 1;
-    uint8_t menuState: 1;
     uint8_t navIndexType;
 } BMBTStatus_t;
 
 typedef struct BMBTContext_t {
     BT_t *bt;
     IBus_t *ibus;
+    uint8_t menu;
     BMBTStatus_t status;
-    BMBTTELStatus_t tel;
     uint8_t timerHeaderIntervals;
     uint8_t timerMenuIntervals;
     uint8_t displayUpdateTaskId;
     uint8_t headerWriteTaskId;
     uint8_t menuWriteTaskId;
-    uint8_t menuPressedTicks: 3;
-    uint8_t menuPressedIdx;
-    uint8_t menuPressTaskId;
-    uint8_t menu;
     uint8_t dspMode;
-    uint8_t speed;
-    uint8_t navZoom: 4;
-    uint8_t navMapShown: 1;
-    uint8_t navSilenced: 1;
-    uint8_t navRange: 1;
-    uint32_t navZoomTime;
     UtilsAbstractDisplayValue_t mainDisplay;
+    uint8_t navZoom: 4;
+    uint32_t navZoomTime;
+
 } BMBTContext_t;
 
 void BMBTInit(BT_t *, IBus_t *);
@@ -192,8 +137,6 @@ void BMBTDestroy();
 void BMBTBTDeviceConnected(void *, uint8_t *);
 void BMBTBTDeviceDisconnected(void *, uint8_t *);
 void BMBTBTMetadata(void *, uint8_t *);
-void BMBTBTPBAPContactReceived(void *, uint8_t *);
-void BMBTBTPBAPSessionStatus(void *, uint8_t *);
 void BMBTBTPlaybackStatus(void *, uint8_t *);
 void BMBTBTReady(void *, uint8_t *);
 void BMBTIBusBMBTButtonPress(void *, uint8_t *);
@@ -203,18 +146,15 @@ void BMBTIKESpeedRPMUpdate(void *, uint8_t *);
 void BMBTIBusMonitorStatus(void *, uint8_t *);
 void BMBTIBusGTMenuBufferUpdate(void *, uint8_t *);
 void BMBTIBusMenuSelect(void *, uint8_t *);
-void BMBTIBusPlaybackCtrl(void *, uint8_t *);
-void BMBTIBusScreenModeSet(void *, uint8_t *);
 void BMBTIBusScreenBufferFlush(void *, uint8_t *);
-void BMBTIBusScreenBufferWrite(void *, uint8_t *);
 void BMBTIBusSensorValueUpdate(void *, uint8_t *);
 void BMBTRADDisplayMenu(void *, uint8_t *);
 void BMBTRADUpdateMainArea(void *, uint8_t *);
 void BMBTRADScreenModeRequest(void *, uint8_t *);
 void BMBTGTScreenModeSet(void *, uint8_t *);
+void BMBTTVStatusUpdate(void *, uint8_t *);
 void BMBTIBusVehicleConfig(void *, uint8_t *);
 void BMBTTimerHeaderWrite(void *);
-void BMBTTimerMenuSelection(void *);
 void BMBTTimerMenuWrite(void *);
 void BMBTTimerScrollDisplay(void *);
 #endif /* BMBT_H */
