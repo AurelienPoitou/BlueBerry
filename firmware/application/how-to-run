@@ -1,0 +1,11 @@
+# Connect 2 virtual sockets
+socat -d -d PTY,raw,echo=0 PTY,raw,echo=0
+
+# Start IBUS simulator
+./ibus-simulator-daemon -f /dev/pts/6
+
+# Check simulator output
+sudo journalctl -t ibus-simulator -f
+
+# Run application and override IBUS port
+sudo IBUS_PORT=/dev/pts/3 ./application

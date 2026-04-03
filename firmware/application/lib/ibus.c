@@ -8,6 +8,7 @@
 #include "log.h"
 #include "timer.h"
 #include "ibus.h"
+#include <sys/sysmacros.h>
 
 static const uint8_t IBUS_SES_NAV_ZOOM_CONSTANT[IBUS_SES_ZOOM_LEVELS] = {
     0x01, // 125 - special case when stationary
@@ -78,7 +79,7 @@ char *portname = "/dev/ttyUSB0";
 IBus_t IBusInit() {
     LogInfo(LOG_SOURCE_IBUS, "IbusInit");
     IBus_t ibus;
-    ibus.serialPort = open(portname, O_RDWR | O_NOCTTY | O_SYNC);
+    ibus.serialPort = open(portname, O_RDWR | O_NOCTTY | O_NONBLOCK);
     if (ibus.serialPort < 0) {
         LogError("error %d opening %s: %s", errno, portname, strerror (errno));
         exit(1);
@@ -95,19 +96,30 @@ IBus_t IBusInit() {
     newtio.c_cflag =    B9600 | /*9600 baud*/
                         CS8 | /*8 bits.*/
                         PARENB | /*Parity enable.*/
+                        PARODD | /*ODD parity - CRITICAL FOR I-BUS*/
+                        CSTOPB | /*2 STOP BITS - CRITICAL FOR I-BUS*/
                         CLOCAL | /*Ignore modem status lines.*/
                         CREAD; /*Enable receiver.*/
     newtio.c_iflag = IGNPAR | IGNBRK; /*Ignore characters with parity errors., Ignore break condition.*/
     newtio.c_oflag = 0;
     newtio.c_lflag = 0;
     newtio.c_cc[VMIN]=1; /*read one byte at the time. TODO: try vmin =max and VTIME=0.2*/
-    newtio.c_cc[VTIME]=0;
+    newtio.c_cc[VTIME]=10;
     if(tcflush(ibus.serialPort, TCIFLUSH) < 0){
     	LogError("tcflush");
     }
     if(tcsetattr(ibus.serialPort, TCSANOW, &newtio) < 0){
     	LogError("tcsetattr");
     }
+
+    // Log startup status
+    LogInfo(LOG_SOURCE_IBUS, "=== IBus Serial Port Ready ===");
+    LogInfo(LOG_SOURCE_IBUS, "Port: %s | Baud: 9600", portname);
+    LogInfo(LOG_SOURCE_IBUS, "Format: 8 bits, 2 STOP, ODD Parity");
+    LogInfo(LOG_SOURCE_IBUS, "RX Buffer: %d bytes | TX Buffer: %d bytes",
+            IBUS_RX_BUFFER_SIZE, IBUS_TX_BUFFER_SIZE);
+    LogInfo(LOG_SOURCE_IBUS, "Status: Waiting for I-Bus traffic");
+    LogInfo(LOG_SOURCE_IBUS, "==============================");
 
     //set_interface_attribs (ibus.serialPort, B9600, 0);  // set speed to 9600 bps, 8n1 (no parity)
     //set_blocking (ibus.serialPort, 0);                // set no blocking
@@ -742,174 +754,208 @@ void WriteToSerial(int fd, const uint8_t *data, size_t length) {
     write(fd, data, length);
 }
 
-void *IBusProcess(void *args) {
+void *IBusProcess(void *args)
+{
+    static uint8_t busReadyLogged = 0;
+
     IBusProcessArgs *processArgs = (IBusProcessArgs *)args;
     IBus_t *ibus = processArgs->ibus;
-    // Check if there is data available to read from the serial port
-    if (ibus->rxBufferIdx < IBUS_RX_BUFFER_SIZE) {
-        // Read data from the serial port into the rxBuffer
-        int bytesRead = ReadFromSerialPort(ibus->serialPort, &ibus->rxBuffer[ibus->rxBufferIdx], 1);
-        if (bytesRead > 0) {
-            ibus->rxBufferIdx++; // Increment the index by the number of bytes read
 
-            // Process the received data if we have enough bytes
-            if (ibus->rxBufferIdx > 1) {
-                uint8_t msgLength = ibus->rxBuffer[1] + 2; // Calculate the expected message length
-                if (msgLength > IBUS_MAX_MSG_LENGTH) {
-                    long long unsigned int ts = (long long unsigned int) TimerGetMillis();
-                    LogRawDebug(
-                        LOG_SOURCE_IBUS,
-                        "[%llu] ERROR: IBus: RX Invalid Length [%d - %02X]: ",
-                        ts,
-                        msgLength,
-                        ibus->rxBuffer[1]
-                    );
-                    for (uint8_t idx = 0; idx < ibus->rxBufferIdx; idx++) {
-                        LogRawDebug(LOG_SOURCE_IBUS, "%02X ", ibus->rxBuffer[idx]);
-                    }
-                    LogRawDebug(LOG_SOURCE_IBUS, "\r\n");
-                    ibus->rxBufferIdx = 0; // Reset the buffer index
-                    memset(ibus->rxBuffer, 0, IBUS_RX_BUFFER_SIZE); // Clear the buffer
-                } else if (msgLength == ibus->rxBufferIdx) {
-                    uint8_t pkt[msgLength];
-                    memset(pkt, 0, msgLength);
-                    long long unsigned int ts = (long long unsigned int) TimerGetMillis();
-                    LogRawDebug(LOG_SOURCE_IBUS, "[%llu] DEBUG: IBus: RX[%d]: ", ts, msgLength);
-                    for (uint8_t idx = 0; idx < msgLength; idx++) {
-                        pkt[idx] = ibus->rxBuffer[idx];
-                        LogRawDebug(LOG_SOURCE_IBUS, "%02X ", pkt[idx]);
-                    }
-                    // Process the packet as needed
-                    // Example: Check against txBuffer or handle the packet
-                    if (memcmp(ibus->txBuffer[ibus->txBufferReadbackIdx], pkt, msgLength) == 0) {
-                        LogRawDebug(LOG_SOURCE_IBUS, "[SELF]");
-                        memset(ibus->txBuffer[ibus->txBufferReadbackIdx], 0, msgLength);
-                        if (ibus->txBufferReadbackIdx + 1 == IBUS_TX_BUFFER_SIZE) {
-                            ibus->txBufferReadbackIdx = 0; // Reset index if at the end
-                        } else {
-                            ibus->txBufferReadbackIdx++;
-                        }
-                    }
-                    LogRawDebug(LOG_SOURCE_IBUS, "\r\n");
-                    if (IBusValidateChecksum(pkt) == 1) {
-                        uint8_t srcSystem = pkt[IBUS_PKT_SRC];
-                        if (srcSystem == IBUS_DEVICE_BLUEBUS &&
-                            pkt[IBUS_PKT_DST] == IBUS_DEVICE_LOC
-                        ) {
-                            IBusHandleBlueBusMessage(ibus, pkt);
-                        }
-                        if (srcSystem == IBUS_DEVICE_RAD) {
-                            IBusHandleRADMessage(ibus, pkt);
-                        }
-                        if (srcSystem == IBUS_DEVICE_BMBT) {
-                            IBusHandleBMBTMessage(ibus, pkt);
-                        }
-                        if (srcSystem == IBUS_DEVICE_IKE) {
-                            IBusHandleIKEMessage(ibus, pkt);
-                        }
-                        if (srcSystem == IBUS_DEVICE_GT) {
-                            IBusHandleGTMessage(ibus, pkt);
-                        }
-                        if (srcSystem == IBUS_DEVICE_LCM) {
-                            IBusHandleLCMMessage(ibus, pkt);
-                        }
-                        if (srcSystem == IBUS_DEVICE_MID) {
-                            IBusHandleMIDMessage(ibus, pkt);
-                        }
-                        if (srcSystem == IBUS_DEVICE_NAVE) {
-                            IBusHandleNAVMessage(ibus, pkt);
-                        }
-                        if (srcSystem == IBUS_DEVICE_MFL) {
-                            IBusHandleMFLMessage(ibus, pkt);
-                        }
-                        if (srcSystem == IBUS_DEVICE_DSP) {
-                            IBusHandleDSPMessage(ibus, pkt);
-                        }
-                        if (srcSystem == IBUS_DEVICE_GM) {
-                            IBusHandleGMMessage(ibus, pkt);
-                        }
-                        if (srcSystem == IBUS_DEVICE_EWS) {
-                            IBusHandleEWSMessage(ibus, pkt);
-                        }
-                        if (srcSystem == IBUS_DEVICE_VM) {
-                            IBusHandleVMMessage(ibus, pkt);
-                        }
-                        if (srcSystem == IBUS_DEVICE_PDC) {
-                            IBusHandlePDCMessage(ibus, pkt);
-                        }
-                        if (pkt[IBUS_PKT_DST] == IBUS_DEVICE_TEL) {
-                            IBusHandleTELMessage(ibus, pkt);
-                        }
-                    } else {
-                        LogError(
-                            "IBus: %02X -> %02X Length: %d - Invalid Checksum",
-                            pkt[IBUS_PKT_SRC],
-                            pkt[IBUS_PKT_DST],
-                            msgLength,
-                            pkt[IBUS_PKT_LEN]
-                        );
-                    }
-                    memset(ibus->rxBuffer, 0, IBUS_RX_BUFFER_SIZE);
-                    ibus->rxBufferIdx = 0;
-                }
+    /* Log startup once */
+    if (!busReadyLogged) {
+        long long unsigned int ts = (long long unsigned int) TimerGetMillis();
+        LogRaw("[%llu] INFO: IBus: READY - Serial port initialized, RX/TX processing started\r\n", ts);
+        LogRaw("[%llu] INFO: IBus: Baud Rate: 9600, Data: 8, Parity: None, Stop: 1\r\n", ts);
+        LogRaw("[%llu] INFO: IBus: RX Buffer: %u bytes, TX Buffer: %u bytes\r\n",
+               ts, IBUS_RX_BUFFER_SIZE, IBUS_TX_BUFFER_SIZE);
+        LogRaw("[%llu] INFO: IBus: Waiting for bus activity...\r\n", ts);
+        busReadyLogged = 1;
+    }
+
+    /* ---- MAIN LOOP ---- */
+    while (ibus->running) {
+        /* ---- WAIT FOR RX DATA (select) ---- */
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        FD_SET(ibus->serialPort, &rfds);
+
+        struct timeval tv;
+        tv.tv_sec = 0;
+        tv.tv_usec = 50000; // 50 ms
+
+        int ret = select(ibus->serialPort + 1, &rfds, NULL, NULL, &tv);
+
+        if (ret < 0) {
+            LogError("IBus: select() failed: %s", strerror(errno));
+            continue;
+        }
+
+        /* ---- RX AVAILABLE ---- */
+        if (ret > 0 && FD_ISSET(ibus->serialPort, &rfds)) {
+
+            int bytesRead = ReadFromSerialPort(
+                ibus->serialPort,
+                &ibus->rxBuffer[ibus->rxBufferIdx],
+                IBUS_RX_BUFFER_SIZE - ibus->rxBufferIdx
+            );
+
+            if (bytesRead > 0) {
+                ibus->rxBufferIdx += bytesRead;
+                ibus->rxLastStamp = TimerGetMillis();
             }
-            if (ibus->rxLastStamp == 0) {
-                EventTriggerCallback(IBUS_EVENT_FirstMessageReceived, 0);
+            else if (bytesRead == -1 && errno == EAGAIN) {
+                break; // no more data available
             }
-            ibus->rxLastStamp = TimerGetMillis();
-        } else if (ibus->txBufferWriteIdx != ibus->txBufferReadIdx) {
-            uint8_t txTimeout = IBUS_TX_TIMEOUT_OFF;
-            uint32_t beginTxTimestamp = TimerGetMillis();
+            else {
+                break; // error or closed
+            }
 
-            while (ibus->txBufferWriteIdx != ibus->txBufferReadIdx && txTimeout != IBUS_TX_TIMEOUT_ON) {
-                uint32_t now = TimerGetMillis();
-                if ((now - ibus->txLastStamp) >= IBUS_TX_BUFFER_WAIT) {
-                    uint8_t msgLen = ibus->txBuffer[ibus->txBufferReadIdx][1] + 2; // Calculate message length
-                    uint8_t idx;
+        }
 
-                    // Send data over the serial port
-                    for (idx = 0; idx < msgLen; idx++) {
-                        // Write to the serial port
-                        WriteToSerial(ibus->serialPort, &ibus->txBuffer[ibus->txBufferReadIdx][idx], 1);
-                        // Optionally, you can add a delay or check for transmission completion
-                    }
+        /* ---- PROCESS RX BUFFER ---- */
+        if (ibus->rxBufferIdx > 1) {
 
-                    txTimeout = IBUS_TX_TIMEOUT_DATA_SENT;
+            uint8_t msgLength = ibus->rxBuffer[1] + 2;
 
-                    // Update the read index
-                    if (ibus->txBufferReadIdx + 1 == IBUS_TX_BUFFER_SIZE) {
-                        ibus->txBufferReadIdx = 0; // Wrap around
-                    } else {
-                        ibus->txBufferReadIdx++;
-                    }
+            /* Invalid length */
+            if (msgLength > IBUS_MAX_MSG_LENGTH) {
+                long long unsigned int ts = (long long unsigned int) TimerGetMillis();
+                LogRawDebug(LOG_SOURCE_IBUS, "[%llu] ERROR: IBus: RX Invalid Length [%d - %02X]: ",
+                            ts, msgLength, ibus->rxBuffer[1]);
 
-                    ibus->txLastStamp = TimerGetMillis(); // Update the last transmission timestamp
-                } else if (txTimeout != IBUS_TX_TIMEOUT_DATA_SENT) {
-                    if ((now - beginTxTimestamp) > IBUS_TX_TIMEOUT_WAIT) {
-                        txTimeout = IBUS_TX_TIMEOUT_ON; // Set timeout if waiting too long
-                    }
+                for (uint8_t i = 0; i < ibus->rxBufferIdx; i++)
+                    LogRawDebug(LOG_SOURCE_IBUS, "%02X ", ibus->rxBuffer[i]);
+
+                LogRawDebug(LOG_SOURCE_IBUS, "\r\n");
+
+                memset(ibus->rxBuffer, 0, IBUS_RX_BUFFER_SIZE);
+                ibus->rxBufferIdx = 0;
+            }
+
+            /* Full frame received */
+            else if (msgLength == ibus->rxBufferIdx) {
+
+                uint8_t pkt[msgLength];
+                memcpy(pkt, ibus->rxBuffer, msgLength);
+
+                long long unsigned int ts = (long long unsigned int) TimerGetMillis();
+                LogRawDebug(LOG_SOURCE_IBUS, "[%llu] DEBUG: IBus: RX[%d]: ", ts, msgLength);
+
+                for (uint8_t i = 0; i < msgLength; i++)
+                    LogRawDebug(LOG_SOURCE_IBUS, "%02X ", pkt[i]);
+
+                LogRawDebug(LOG_SOURCE_IBUS, "\r\n");
+
+                /* Check for self‑echo */
+                if (memcmp(ibus->txBuffer[ibus->txBufferReadbackIdx], pkt, msgLength) == 0) {
+                    memset(ibus->txBuffer[ibus->txBufferReadbackIdx], 0, msgLength);
+                    ibus->txBufferReadbackIdx =
+                        (ibus->txBufferReadbackIdx + 1) % IBUS_TX_BUFFER_SIZE;
                 }
+
+                /* Validate checksum */
+                if (IBusValidateChecksum(pkt)) {
+
+                    uint8_t src = pkt[IBUS_PKT_SRC];
+                    uint8_t dst = pkt[IBUS_PKT_DST];
+
+                    /* Dispatch to handlers */
+                    if (src == IBUS_DEVICE_BLUEBUS && dst == IBUS_DEVICE_LOC)
+                        IBusHandleBlueBusMessage(ibus, pkt);
+
+                    if (src == IBUS_DEVICE_RAD)
+                        IBusHandleRADMessage(ibus, pkt);
+
+                    if (src == IBUS_DEVICE_BMBT)
+                        IBusHandleBMBTMessage(ibus, pkt);
+
+                    if (src == IBUS_DEVICE_IKE)
+                        IBusHandleIKEMessage(ibus, pkt);
+
+                    if (src == IBUS_DEVICE_GT)
+                        IBusHandleGTMessage(ibus, pkt);
+
+                    if (src == IBUS_DEVICE_LCM)
+                        IBusHandleLCMMessage(ibus, pkt);
+
+                    if (src == IBUS_DEVICE_MID)
+                        IBusHandleMIDMessage(ibus, pkt);
+
+                    if (src == IBUS_DEVICE_NAVE)
+                        IBusHandleNAVMessage(ibus, pkt);
+
+                    if (src == IBUS_DEVICE_MFL)
+                        IBusHandleMFLMessage(ibus, pkt);
+
+                    if (src == IBUS_DEVICE_DSP)
+                        IBusHandleDSPMessage(ibus, pkt);
+
+                    if (src == IBUS_DEVICE_GM)
+                        IBusHandleGMMessage(ibus, pkt);
+
+                    if (src == IBUS_DEVICE_EWS)
+                        IBusHandleEWSMessage(ibus, pkt);
+
+                    if (src == IBUS_DEVICE_VM)
+                        IBusHandleVMMessage(ibus, pkt);
+
+                    if (src == IBUS_DEVICE_PDC)
+                        IBusHandlePDCMessage(ibus, pkt);
+
+                    if (dst == IBUS_DEVICE_TEL)
+                        IBusHandleTELMessage(ibus, pkt);
+                }
+
+                /* Reset RX buffer */
+                memset(ibus->rxBuffer, 0, IBUS_RX_BUFFER_SIZE);
+                ibus->rxBufferIdx = 0;
             }
         }
 
-        // Check for RX buffer timeout
+        /* ---- TX LOGIC ---- */
+        if (ibus->txBufferWriteIdx != ibus->txBufferReadIdx) {
+
+            uint8_t msgLen = ibus->txBuffer[ibus->txBufferReadIdx][1] + 2;
+
+            long long unsigned int ts = (long long unsigned int) TimerGetMillis();
+            LogRawDebug(LOG_SOURCE_IBUS, "[%llu] DEBUG: IBus: TX[%d]: ", ts, msgLen);
+
+            for (uint8_t i = 0; i < msgLen; i++)
+                LogRawDebug(LOG_SOURCE_IBUS, "%02X ", ibus->txBuffer[ibus->txBufferReadIdx][i]);
+
+            LogRawDebug(LOG_SOURCE_IBUS, "\r\n");
+
+            for (uint8_t i = 0; i < msgLen; i++)
+                WriteToSerial(ibus->serialPort, &ibus->txBuffer[ibus->txBufferReadIdx][i], 1);
+
+            ibus->txBufferReadIdx =
+                (ibus->txBufferReadIdx + 1) % IBUS_TX_BUFFER_SIZE;
+
+            ibus->txLastStamp = TimerGetMillis();
+        }
+
+        /* ---- RX TIMEOUT ---- */
         if (ibus->rxBufferIdx > 0) {
             uint32_t now = TimerGetMillis();
-            if ((now - ibus->rxLastStamp) > IBUS_RX_BUFFER_TIMEOUT || (ibus->rxBufferIdx + 1) == IBUS_RX_BUFFER_SIZE) {
+            if ((now - ibus->rxLastStamp) > IBUS_RX_BUFFER_TIMEOUT) {
+
                 long long unsigned int ts = (long long unsigned int) TimerGetMillis();
-                LogRawDebug(LOG_SOURCE_IBUS, "[%llu] ERROR: IBus: RX Buffer Timeout [%d]: ", ts, ibus->rxBufferIdx);
-                for (uint8_t idx = 0; idx < ibus->rxBufferIdx; idx++) {
-                    LogRawDebug(LOG_SOURCE_IBUS, "%02X ", ibus->rxBuffer[idx]);
-                }
+                LogRawDebug(LOG_SOURCE_IBUS, "[%llu] ERROR: IBus: RX Buffer Timeout [%d]: ",
+                            ts, ibus->rxBufferIdx);
+
+                for (uint8_t i = 0; i < ibus->rxBufferIdx; i++)
+                    LogRawDebug(LOG_SOURCE_IBUS, "%02X ", ibus->rxBuffer[i]);
+
                 LogRawDebug(LOG_SOURCE_IBUS, "\r\n");
-                ibus->rxBufferIdx = 0; // Reset the buffer index
-                memset(ibus->rxBuffer, 0, IBUS_RX_BUFFER_SIZE); // Clear the buffer
+
+                memset(ibus->rxBuffer, 0, IBUS_RX_BUFFER_SIZE);
+                ibus->rxBufferIdx = 0;
             }
         }
     }
+
     return NULL;
 }
-
 
 void IBusSendCommand(
     IBus_t *ibus,

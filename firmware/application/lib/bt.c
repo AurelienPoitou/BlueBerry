@@ -51,8 +51,12 @@ BT_t BTInit()
     memset(bt.pairingErrors, 0, sizeof(bt.pairingErrors));
     // Make sure that we initialize the char arrays to all zeros
     BTClearMetadata(&bt);
-    GError *err;
+    GError *err = NULL;
     bt.connection = g_bus_get_sync(G_BUS_TYPE_SYSTEM, NULL, &err);
+    if (bt.connection == NULL) {
+        LogError("Failed to connect to system bus (no connection returned)\n");
+        exit(1);
+    }
     if (err != NULL) {
         LogError("Error connecting to system bus: %s\n", err->message);
         g_clear_error(&err);

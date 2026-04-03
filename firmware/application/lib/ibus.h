@@ -475,6 +475,7 @@ typedef struct IBusPDCSensorStatus_t {
 } IBusPDCSensorStatus_t;
 
 typedef struct IBus_t {
+    int running;
     //UART_t uart;
     int serialPort; // File descriptor for the serial port
     uint8_t rxBuffer[IBUS_RX_BUFFER_SIZE];
@@ -510,6 +511,8 @@ typedef struct IBus_t {
 typedef struct IBusProcessArgs {
     IBus_t * ibus;
 } IBusProcessArgs;
+
+extern char *portname;
 
 IBus_t IBusInit();
 void *IBusProcess(void *);

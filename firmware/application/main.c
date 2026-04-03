@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <pigpio.h>
+#include <unistd.h>
 //#include "sysconfig.h"
 #include <pthread.h>
 #include "handler.h"
@@ -28,6 +29,12 @@ int main(void)
     // Initialize low level modules
     TimerInit();
 
+    char *env = getenv("IBUS_PORT");
+    LogInfo(LOG_SOURCE_SYSTEM, "IBUS_PORT:%s", env);
+    if (env)
+        portname = env;
+
+
     // Initialize Bluetooth and other components
     struct BT_t bt = BTInit();
     struct IBus_t ibus = IBusInit();
@@ -51,19 +58,42 @@ int main(void)
 
     // Create a thread to run IBusProcess
     pthread_t ibus_thread_id;
+    ibus.running = 1;
     if (pthread_create(&ibus_thread_id, NULL, IBusProcess, ibusArgs) != 0) {
         LogError("Failed to create IBusProcess thread\n");
         free(ibusArgs);
         return EXIT_FAILURE;
     }
 
+    // Add to main() after serial port opens:
+    long long unsigned int ts = (long long unsigned int) TimerGetMillis();
+    LogRaw("\r\n");
+    LogRaw("[%llu] ═══════════════════════════════════════════════════════════\r\n", ts);
+    LogRaw("[%llu] IBus System Initialization Complete\r\n", ts);
+    LogRaw("[%llu] ═══════════════════════════════════════════════════════════\r\n", ts);
+//    LogRaw("[%llu] Serial Port: %s\r\n", ts, IBUS_PORT_NAME);
+    LogRaw("[%llu] Baud Rate: 9600 (8-N-2, ODD Parity)\r\n", ts);
+    LogRaw("[%llu] RX Buffer: Ready (%u bytes)\r\n", ts, IBUS_RX_BUFFER_SIZE);
+    LogRaw("[%llu] TX Buffer: Ready (%u bytes)\r\n", ts, IBUS_TX_BUFFER_SIZE);
+    LogRaw("[%llu] Status: Waiting for I-Bus traffic\r\n", ts);
+    LogRaw("[%llu] ═══════════════════════════════════════════════════════════\r\n", ts);
+    LogRaw("[%llu] Entering main loop...\r\n", ts);
+    LogRaw("[%llu] ═══════════════════════════════════════════════════════════\r\n\r\n", ts);
+
     // Main loop
     while (1) {
-//        BTProcess(&bt);
-//        IBusProcess(&ibus);
+        //BTProcess(&bt);
+        //IBusProcess(&ibus);
         TimerProcessScheduledTasks();
+        usleep(10000);
         // Add any other processing needed
     }
+
+    pthread_join(bt_thread_id, NULL);
+    ibus.running = 0;
+    pthread_join(ibus_thread_id, NULL);
+    free(btArgs);
+    free(ibusArgs);
 
     gpioTerminate();
     return 0;
