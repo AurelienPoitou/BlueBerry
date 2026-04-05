@@ -19,6 +19,7 @@ SRC = \
     lib/ibus.c \
     lib/locale.c \
     lib/log.c \
+    lib/shutdown.c \
     lib/timer.c \
     lib/utils.c \
     ui/bmbt.c \
@@ -44,6 +45,7 @@ HEADERS = \
     lib/ibus.h \
     lib/locale.h \
     lib/log.h \
+    lib/shutdown.h \
     lib/timer.h \
     lib/utils.h \
     ui/menu/menu_singleline.h \

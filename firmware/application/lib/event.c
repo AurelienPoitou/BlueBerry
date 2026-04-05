@@ -8,7 +8,7 @@ void EventRegisterCallback(uint8_t eventType, void *callback, void *context)
 {
     Event_t cb;
     cb.type = eventType;
-    //LogDebug(LOG_SOURCE_SYSTEM, "Registering event callback for: %d", eventType);
+    LogDebug(LOG_SOURCE_SYSTEM, "Registering event callback for: %d", eventType);
     cb.callback = callback;
     cb.context = context;
     EVENT_CALLBACKS[EVENT_CALLBACKS_COUNT++] = cb;
@@ -32,7 +32,7 @@ uint8_t EventUnregisterCallback(uint8_t eventType, void *callback)
 void EventTriggerCallback(uint8_t eventType, unsigned char *data)
 {
     uint8_t idx;
-//    LogDebug(LOG_SOURCE_SYSTEM, "Triggering event: %d - %s", eventType, data);
+    LogDebug(LOG_SOURCE_SYSTEM, "Triggering event: %d - %s", eventType, data);
     for (idx = 0; idx < EVENT_CALLBACKS_COUNT; idx++) {
         volatile Event_t *cb = &EVENT_CALLBACKS[idx];
         if (cb->type == eventType) {

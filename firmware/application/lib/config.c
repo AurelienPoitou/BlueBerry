@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "config.h"
+#include "log.h"
 
 #define CONFIG_FILE "config.bin"
 
@@ -27,6 +28,7 @@ static inline uint8_t ConfigGetByte(uint8_t address) {
             CONFIG_SETTING_CACHE[address] = value;
         }
     }
+//    LogDebug(LOG_SOURCE_CONFIG, "Get Byte %i = %i", address, value);
     return value;
 }
 
@@ -35,6 +37,7 @@ static inline void ConfigSetByte(uint8_t address, uint8_t value) {
         CONFIG_SETTING_CACHE[address] = value;
     }
     FILE *file = fopen(CONFIG_FILE, "r+b");
+    LogDebug(LOG_SOURCE_CONFIG, "Set Byte %i to %i", address, value);
     if (file) {
         fseek(file, address, SEEK_SET);
         fwrite(&value, sizeof(uint8_t), 1, file);

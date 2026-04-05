@@ -1,187 +1,274 @@
-#include <glib.h>
-#include <gio/gio.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
+#include <signal.h>
+
+#include <gio/gio.h>
 #include <dbus/dbus.h>
 #include <bluetooth/bluetooth.h>
-#include <bluetooth/hci.h>
-#include <bluetooth/hci_lib.h>
+
+#include "bt_common.h"
 #include "bt_rpi4.h"
+#include "../timer.h"
+#include "../utils.h"
 #include "../log.h"
+#include "../event.h"
+#include "../shutdown.h"
 
-#define BLUETOOTH_PROFILE_DEFAULT "org.bluez.Profile1"
-#define BLUETOOTH_PROFILE_MANAGER_DEFAULT "org.bluez.ProfileManager1"
+/* ------------------------------------------------------------------------- */
+/* BlueZ constants                                                           */
+/* ------------------------------------------------------------------------- */
 
-#define BLUEZ_BUS_NAME             "org.bluez"
-#define ADAPTER_OBJECT_PATH        "/org/bluez/hci0"
-#define DEVICE_PATH_PREFIX         "/org/bluez/hci0/dev_"
-#define ADAPTER_INTERFACE          "org.bluez.Adapter1"
-#define DEVICE_INTERFACE           "org.bluez.Device1"
-#define MEDIAPLAYER_INTERFACE      "org.bluez.MediaPlayer1"
-#define MEDIACONTROL_INTERFACE     "org.bluez.MediaControl1"
-#define PROFILEMANAGER_INTERFACE   "org.bluez.Profile1"
-#define PROPERTIES_CHANGED_SIGNAL  "PropertiesChanged"
+#ifndef BLUEZ_BUS_NAME
+#define BLUEZ_BUS_NAME                  "org.bluez"
+#endif
 
-#define A2DP_PROFILE_UUID "0000110A-0000-1000-8000-00805F9B34FB" //"0000110e-0000-1000-8000-00805f9b34fb"
-#define HFP_PROFILE_UUID  "0000111E-0000-1000-8000-00805F9B34FB"
-#define VRP_PROFILE_UUID  "0000111F-0000-1000-8000-00805F9B34FB"
+#ifndef ADAPTER_OBJECT_PATH
+#define ADAPTER_OBJECT_PATH             "/org/bluez/hci0"
+#endif
+
+#ifndef ADAPTER_INTERFACE
+#define ADAPTER_INTERFACE               "org.bluez.Adapter1"
+#endif
+
+#ifndef DEVICE_INTERFACE
+#define DEVICE_INTERFACE                "org.bluez.Device1"
+#endif
+
+#ifndef DEVICE_PATH_PREFIX
+#define DEVICE_PATH_PREFIX              "/org/bluez/hci0/dev_"
+#endif
+
+#ifndef PROFILEMANAGER_OBJECT_PATH
+#define PROFILEMANAGER_OBJECT_PATH      "/org/bluez"
+#endif
+
+#ifndef PROFILEMANAGER_INTERFACE
+#define PROFILEMANAGER_INTERFACE        "org.bluez.ProfileManager1"
+#endif
+
+#ifndef MEDIAPLAYER_INTERFACE
+#define MEDIAPLAYER_INTERFACE           "org.bluez.MediaPlayer1"
+#endif
+
+#ifndef MEDIACONTROL_INTERFACE
+#define MEDIACONTROL_INTERFACE          "org.bluez.MediaControl1"
+#endif
+
+#ifndef PROPERTIES_CHANGED_SIGNAL
+#define PROPERTIES_CHANGED_SIGNAL       "PropertiesChanged"
+#endif
+
+/* Profiles */
+#ifndef A2DP_PROFILE_UUID
+#define A2DP_PROFILE_UUID               "0000110A-0000-1000-8000-00805F9B34FB"
+#endif
+
+#ifndef HFP_PROFILE_UUID
+#define HFP_PROFILE_UUID                "0000111E-0000-1000-8000-00805F9B34FB"
+#endif
+
+#ifndef AVRCP_PROFILE_UUID
+#define AVRCP_PROFILE_UUID              "0000111F-0000-1000-8000-00805F9B34FB"
+#endif
+
+#ifndef A2DP_PROFILE_PATH
+#define A2DP_PROFILE_PATH               "/com/myapp/a2dp"
+#endif
+
+#ifndef HFP_PROFILE_PATH
+#define HFP_PROFILE_PATH                "/com/myapp/hfp"
+#endif
+
+#ifndef AVRCP_PROFILE_PATH
+#define AVRCP_PROFILE_PATH              "/com/myapp/avrcp"
+#endif
+
+/* ------------------------------------------------------------------------- */
+/* Globals                                                                   */
+/* ------------------------------------------------------------------------- */
 
 char device_addr[256];
 gboolean loop_exit = FALSE;
-guint mediaplayer_changed;
-guint mediacontrol_changed;
+guint mediaplayer_changed = 0;
+guint mediacontrol_changed = 0;
 
-char* uint8_array_to_mac(const uint8_t mac_array[6]) {
-    // Allocate memory for the MAC address string
-    char *mac_str = malloc(18); // 17 characters for the MAC address + 1 for the null terminator
+/* ------------------------------------------------------------------------- */
+/* Helper: MAC conversions                                                   */
+/* ------------------------------------------------------------------------- */
+
+char *uint8_array_to_mac(const uint8_t mac_array[6])
+{
+    char *mac_str = malloc(18);
     if (mac_str == NULL) {
-        return NULL; // Handle memory allocation failure
+        return NULL;
     }
-
-    // Format the MAC address into the string
     snprintf(mac_str, 18, "%02X_%02X_%02X_%02X_%02X_%02X",
              mac_array[0], mac_array[1], mac_array[2],
              mac_array[3], mac_array[4], mac_array[5]);
-
     return mac_str;
 }
 
-void mac_to_uint8_array(const char *mac_str, uint8_t mac_array[6]) {
-    // Use sscanf to parse the MAC address string
+void mac_to_uint8_array(const char *mac_str, uint8_t mac_array[6])
+{
     sscanf(mac_str, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
            &mac_array[0], &mac_array[1], &mac_array[2],
            &mac_array[3], &mac_array[4], &mac_array[5]);
 }
 
-// Function to handle property values
-void bluez_property_value(const gchar *key, GVariant *value) {
+/* ------------------------------------------------------------------------- */
+/* BlueZ adapter helper                                                      */
+/* ------------------------------------------------------------------------- */
+
+typedef void (*method_cb_t)(GObject *, GAsyncResult *, gpointer);
+
+int bluez_adapter_call_method(GDBusConnection *conn,
+                              const char *method,
+                              GVariant *param,
+                              method_cb_t method_cb)
+{
+    g_dbus_connection_call(conn,
+                           BLUEZ_BUS_NAME,
+                           ADAPTER_OBJECT_PATH,
+                           ADAPTER_INTERFACE,
+                           method,
+                           param,
+                           NULL,
+                           G_DBUS_CALL_FLAGS_NONE,
+                           -1,
+                           NULL,
+                           method_cb,
+                           NULL);
+    return 0;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Property dump helper                                                      */
+/* ------------------------------------------------------------------------- */
+
+void bluez_property_value(const gchar *key, GVariant *value)
+{
     const gchar *type = g_variant_get_type_string(value);
 
     LogDebug(LOG_SOURCE_BT, "\t%s : ", key);
     switch (*type) {
-        case 'o': // Object path
-        case 's': // String
+        case 'o':
+        case 's':
             LogDebug(LOG_SOURCE_BT, "%s", g_variant_get_string(value, NULL));
             break;
-        case 'b': // Boolean
+        case 'b':
             LogDebug(LOG_SOURCE_BT, "%d", g_variant_get_boolean(value));
             break;
-        case 'u': // Unsigned integer
+        case 'u':
             LogDebug(LOG_SOURCE_BT, "%u", g_variant_get_uint32(value));
             break;
-        case 'i': // Signed integer
+        case 'i':
             LogDebug(LOG_SOURCE_BT, "%d", g_variant_get_int32(value));
             break;
-        case 'd': // Double
+        case 'd':
             LogDebug(LOG_SOURCE_BT, "%f", g_variant_get_double(value));
             break;
-        case 'a': // Array
-            if (g_strcmp0(type, "as") == 0) { // Array of strings
-                LogDebug(LOG_SOURCE_BT, "Array of strings:");
+        case 'a':
+            if (g_strcmp0(type, "as") == 0) {
                 const gchar *str_value;
                 GVariantIter i;
+                LogDebug(LOG_SOURCE_BT, "Array of strings:");
                 g_variant_iter_init(&i, value);
                 while (g_variant_iter_next(&i, "s", &str_value)) {
                     LogDebug(LOG_SOURCE_BT, "\t\t%s", str_value);
                 }
-            } else if (g_str_has_prefix(type, "a{")) { // Array of dictionaries
-                LogDebug(LOG_SOURCE_BT, "Array of dictionaries:");
+            } else if (g_str_has_prefix(type, "a{")) {
                 GVariantIter dict_iter;
-                g_variant_iter_init(&dict_iter, value);
                 GVariant *dict_entry;
-
+                LogDebug(LOG_SOURCE_BT, "Array of dictionaries:");
+                g_variant_iter_init(&dict_iter, value);
                 while (g_variant_iter_next(&dict_iter, "a{sa{sv}}", &dict_entry)) {
-                    LogDebug(LOG_SOURCE_BT, "\tArray entry parsing");
                     const gchar *dict_key;
                     GVariant *dict_value;
                     GVariantIter entry_iter;
-
                     g_variant_iter_init(&entry_iter, dict_entry);
                     while (g_variant_iter_next(&entry_iter, "{&sv}", &dict_key, &dict_value)) {
-                        // Log the key and value of the dictionary
-                        LogDebug(LOG_SOURCE_BT, "\t\tKey: %s, Value Type: %s", dict_key, g_variant_get_type_string(dict_value));
-
-                        // Handle specific value types
+                        LogDebug(LOG_SOURCE_BT,
+                                 "\t\tKey: %s, Value Type: %s",
+                                 dict_key,
+                                 g_variant_get_type_string(dict_value));
                         if (g_variant_is_of_type(dict_value, G_VARIANT_TYPE_STRING)) {
-                            const gchar *str_value = g_variant_get_string(dict_value, NULL);
-                            LogDebug(LOG_SOURCE_BT, "Value: %s", str_value);
+                            const gchar *sv = g_variant_get_string(dict_value, NULL);
+                            LogDebug(LOG_SOURCE_BT, "Value: %s", sv);
                         } else if (g_variant_is_of_type(dict_value, G_VARIANT_TYPE_BOOLEAN)) {
-                            gboolean bool_value = g_variant_get_boolean(dict_value);
-                            LogDebug(LOG_SOURCE_BT, "Value: %s", bool_value ? "true" : "false");
+                            gboolean bv = g_variant_get_boolean(dict_value);
+                            LogDebug(LOG_SOURCE_BT, "Value: %s", bv ? "true" : "false");
                         } else if (g_variant_is_of_type(dict_value, G_VARIANT_TYPE_UINT32)) {
-                            guint32 uint_value = g_variant_get_uint32(dict_value);
-                            LogDebug(LOG_SOURCE_BT, "Value: %u", uint_value);
+                            guint32 uv = g_variant_get_uint32(dict_value);
+                            LogDebug(LOG_SOURCE_BT, "Value: %u", uv);
                         } else if (g_variant_is_of_type(dict_value, G_VARIANT_TYPE_INT32)) {
-                            gint32 int_value = g_variant_get_int32(dict_value);
-                            LogDebug(LOG_SOURCE_BT, "Value: %d", int_value);
+                            gint32 iv = g_variant_get_int32(dict_value);
+                            LogDebug(LOG_SOURCE_BT, "Value: %d", iv);
                         } else if (g_variant_is_of_type(dict_value, G_VARIANT_TYPE_DOUBLE)) {
-                            gdouble double_value = g_variant_get_double(dict_value);
-                            LogDebug(LOG_SOURCE_BT, "Value: %f", double_value);
+                            gdouble dv = g_variant_get_double(dict_value);
+                            LogDebug(LOG_SOURCE_BT, "Value: %f", dv);
                         } else {
                             LogDebug(LOG_SOURCE_BT, "Value: Unknown type");
                         }
+                        g_variant_unref(dict_value);
                     }
+                    g_variant_unref(dict_entry);
                 }
             }
             break;
         default:
-            LogDebug(LOG_SOURCE_BT, "Value: Unknown type\n");
+            LogDebug(LOG_SOURCE_BT, "Value: Unknown type");
             break;
     }
 }
 
-void on_properties_changed(GDBusConnection *connection,
-                      const gchar *sender_name,
-                      const gchar *object_path,
-                      const gchar *interface_name,
-                      const gchar *signal_name,
-                      GVariant *parameters,
-                      gpointer user_data)
+/* ------------------------------------------------------------------------- */
+/* Media player / metadata handling                                          */
+/* ------------------------------------------------------------------------- */
+
+static void on_properties_changed(GDBusConnection *connection,
+                                  const gchar *sender_name,
+                                  const gchar *object_path,
+                                  const gchar *interface_name,
+                                  const gchar *signal_name,
+                                  GVariant *parameters,
+                                  gpointer user_data)
 {
     (void)connection;
     (void)sender_name;
     (void)object_path;
     (void)interface_name;
     (void)signal_name;
-    BT_t *bt = (BT_t*)user_data;
-    const gchar *type_string = g_variant_get_type_string(parameters);
-    //LogDebug(LOG_SOURCE_BT, "Properties Changed - Parameters: %s", type_string);
+
+    BT_t *bt = (BT_t *)user_data;
     GVariantIter *properties_iter;
     const gchar *key;
     GVariant *value;
+
     g_variant_get(parameters, "(sa{sv}as)", NULL, &properties_iter, NULL);
     while (g_variant_iter_next(properties_iter, "{sv}", &key, &value)) {
         if (g_strcmp0(key, "Status") == 0) {
-            const char* status = g_variant_get_string(value, NULL);
-            if (g_strcmp0(g_ascii_strdown(status, -1), "playing") == 0) {
+            const char *status = g_variant_get_string(value, NULL);
+            gchar *lower = g_ascii_strdown(status, -1);
+            if (g_strcmp0(lower, "playing") == 0) {
                 bt->playbackStatus = BT_AVRCP_STATUS_PLAYING;
-                EventTriggerCallback(BT_EVENT_PLAYBACK_STATUS_CHANGE, 0);
-            } else if (g_strcmp0(g_ascii_strdown(status, -1), "paused") == 0) {
+                EventTriggerCallback(BT_EVENT_PLAYBACK_STATUS_CHANGE, NULL);
+            } else if (g_strcmp0(lower, "paused") == 0) {
                 bt->playbackStatus = BT_AVRCP_STATUS_PAUSED;
-                EventTriggerCallback(BT_EVENT_PLAYBACK_STATUS_CHANGE, 0);
+                EventTriggerCallback(BT_EVENT_PLAYBACK_STATUS_CHANGE, NULL);
             }
+            g_free(lower);
         } else if (g_strcmp0(key, "Track") == 0) {
-            const gchar *type = g_variant_get_type_string(value);
-
-            //LogDebug(LOG_SOURCE_BT, "\t%s - %s : ", key, type);
-            
-            // Unpack the GVariant
             GVariantIter iter;
-            g_variant_iter_init(&iter, value);
-
             GVariant *track_value;
             const gchar *track_key;
 
-            // Iterate over the array of key-value pairs
+            g_variant_iter_init(&iter, value);
             while (g_variant_iter_next(&iter, "{sv}", &track_key, &track_value)) {
-                // Print the key
-                //LogDebug(LOG_SOURCE_BT, "Key: %s-\n", track_key);
                 bt->metadataTimestamp = TimerGetMillis();
                 if (g_strcmp0(track_key, "Title") == 0) {
                     char title[BT_METADATA_MAX_SIZE] = {0};
-                    const char* g_title = g_variant_get_string(track_value, NULL);
+                    const char *g_title = g_variant_get_string(track_value, NULL);
                     UtilsNormalizeText(title, g_title, BT_METADATA_MAX_SIZE);
                     if (strncmp(bt->title, title, BT_METADATA_FIELD_SIZE - 1) != 0) {
                         bt->metadataStatus = BT_METADATA_STATUS_UPD;
@@ -192,7 +279,7 @@ void on_properties_changed(GDBusConnection *connection,
                     }
                 } else if (g_strcmp0(track_key, "Artist") == 0) {
                     char artist[BT_METADATA_MAX_SIZE] = {0};
-                    const char* g_artist = g_variant_get_string(track_value, NULL);
+                    const char *g_artist = g_variant_get_string(track_value, NULL);
                     UtilsNormalizeText(artist, g_artist, BT_METADATA_MAX_SIZE);
                     if (strncmp(bt->artist, artist, BT_METADATA_FIELD_SIZE - 1) != 0) {
                         bt->metadataStatus = BT_METADATA_STATUS_UPD;
@@ -201,7 +288,7 @@ void on_properties_changed(GDBusConnection *connection,
                     }
                 } else if (g_strcmp0(track_key, "Album") == 0) {
                     char album[BT_METADATA_MAX_SIZE] = {0};
-                    const char* g_album = g_variant_get_string(track_value, NULL);
+                    const char *g_album = g_variant_get_string(track_value, NULL);
                     UtilsNormalizeText(album, g_album, BT_METADATA_MAX_SIZE);
                     if (strncmp(bt->album, album, BT_METADATA_FIELD_SIZE - 1) != 0) {
                         bt->metadataStatus = BT_METADATA_STATUS_UPD;
@@ -209,137 +296,132 @@ void on_properties_changed(GDBusConnection *connection,
                         UtilsStrncpy(bt->album, album, BT_METADATA_FIELD_SIZE);
                     }
                 }
-
-                // Clean up the value if necessary
                 g_variant_unref(track_value);
             }
-            //LogError("BT: title=%s,artist=%s,album=%s - %u", bt->title, bt->artist, bt->album, bt->metadataStatus);
+
             if (bt->metadataStatus == BT_METADATA_STATUS_UPD) {
-                LogDebug(
-                    LOG_SOURCE_BT,
-                    "BT: title=%s,artist=%s,album=%s",
-                    bt->title,
-                    bt->artist,
-                    bt->album
-                );
-                EventTriggerCallback(BT_EVENT_METADATA_UPDATE, 0);
+                LogDebug(LOG_SOURCE_BT,
+                         "BT: title=%s,artist=%s,album=%s",
+                         bt->title,
+                         bt->artist,
+                         bt->album);
+                EventTriggerCallback(BT_EVENT_METADATA_UPDATE, NULL);
             }
             bt->metadataStatus = BT_METADATA_STATUS_CUR;
-        } else {
-            //bluez_property_value(key, value);
         }
         g_variant_unref(value);
     }
     g_variant_iter_free(properties_iter);
 }
 
-typedef void (*method_cb_t)(GObject *, GAsyncResult *, gpointer);
-int bluez_adapter_call_method(GDBusConnection *conn, const char *method, GVariant *param, method_cb_t method_cb)
+guint subscribe_to_mediaplayer_events(BT_t *bt, const char *playerPath)
 {
-    GError *error = NULL;
-
-    g_dbus_connection_call(conn,
-                 BLUEZ_BUS_NAME,
-                 ADAPTER_OBJECT_PATH,
-                 ADAPTER_INTERFACE,
-                 method,
-                 param,
-                 NULL,
-                 G_DBUS_CALL_FLAGS_NONE,
-                 -1,
-                 NULL,
-                 method_cb,
-                 &error);
-    if(error != NULL)
-        return 1;
-    return 0;
-}
-
-guint subscribe_to_mediaplayer_events(BT_t *bt, const char* playerPath) {
     LogDebug(LOG_SOURCE_BT, "Subscribed to MediaPlayer events");
     return g_dbus_connection_signal_subscribe(bt->connection,
-            BLUEZ_BUS_NAME,
-            "org.freedesktop.DBus.Properties",
-            PROPERTIES_CHANGED_SIGNAL,
-            (gchar*)playerPath,
-            MEDIAPLAYER_INTERFACE,
-            G_DBUS_SIGNAL_FLAGS_NONE,
-            on_properties_changed,
-            bt,
-            NULL);
+                                              BLUEZ_BUS_NAME,
+                                              "org.freedesktop.DBus.Properties",
+                                              PROPERTIES_CHANGED_SIGNAL,
+                                              (gchar *)playerPath,
+                                              MEDIAPLAYER_INTERFACE,
+                                              G_DBUS_SIGNAL_FLAGS_NONE,
+                                              on_properties_changed,
+                                              bt,
+                                              NULL);
 }
 
-guint subscribe_to_mediacontrol_events(BT_t *bt, const char* playerPath) {
+guint subscribe_to_mediacontrol_events(BT_t *bt, const char *playerPath)
+{
     LogDebug(LOG_SOURCE_BT, "Subscribed to MediaControl events");
     return g_dbus_connection_signal_subscribe(bt->connection,
-            BLUEZ_BUS_NAME,
-            "org.freedesktop.DBus.Properties",
-            PROPERTIES_CHANGED_SIGNAL,
-            (gchar*)playerPath,
-            MEDIACONTROL_INTERFACE,
-            G_DBUS_SIGNAL_FLAGS_NONE,
-            on_properties_changed,
-            bt,
-            NULL);
+                                              BLUEZ_BUS_NAME,
+                                              "org.freedesktop.DBus.Properties",
+                                              PROPERTIES_CHANGED_SIGNAL,
+                                              (gchar *)playerPath,
+                                              MEDIACONTROL_INTERFACE,
+                                              G_DBUS_SIGNAL_FLAGS_NONE,
+                                              on_properties_changed,
+                                              bt,
+                                              NULL);
 }
 
+/* ------------------------------------------------------------------------- */
+/* Device appeared / disappeared                                             */
+/* ------------------------------------------------------------------------- */
+
 static void bluez_device_appeared(GDBusConnection *sig,
-    const gchar *sender_name,
-    const gchar *object_path,
-    const gchar *interface,
-    const gchar *signal_name,
-    GVariant *parameters,
-    gpointer user_data)
+                                  const gchar *sender_name,
+                                  const gchar *object_path,
+                                  const gchar *interface,
+                                  const gchar *signal_name,
+                                  GVariant *parameters,
+                                  gpointer user_data)
 {
+    (void)sig;
+    (void)sender_name;
+    (void)object_path;
+    (void)interface;
+    (void)signal_name;
+
+    BT_t *bt = (BT_t *)user_data;
     GVariantIter *interfaces;
     const char *object;
     const gchar *interface_name;
     GVariant *properties;
-    BT_t *bt = (BT_t*)user_data;
 
-    const gchar *type_string = g_variant_get_type_string(parameters);
-    //LogDebug(LOG_SOURCE_BT, "Received parameters type: %s", type_string);
-    g_assert(g_str_equal(type_string, "(oa{sa{sv}})"));
+    g_assert(g_str_equal(g_variant_get_type_string(parameters), "(oa{sa{sv}})"));
     g_variant_get(parameters, "(oa{sa{sv}})", &object, &interfaces);
     LogDebug(LOG_SOURCE_BT, "Device Connected: %s", object);
-    //bt->status = BT_STATUS_CONNECTED;
-    //EventTriggerCallback(BT_EVENT_DEVICE_CONNECTED, 0);
-    //type_string = g_variant_get_type_string(interfaces);
-    //LogDebug(LOG_SOURCE_BT, "Received interfaces type: %s", type_string);
-    while (g_variant_iter_next(interfaces, "{&s@a{sv}}", &interface_name, &properties))
-    {
+
+    while (g_variant_iter_next(interfaces, "{&s@a{sv}}", &interface_name, &properties)) {
         LogDebug(LOG_SOURCE_BT, "Interface Added: %s", interface_name);
-        if (g_strstr_len(g_ascii_strdown(interface_name, -1), -1, "mediaplayer"))
-        {
+        if (g_strstr_len(g_ascii_strdown(interface_name, -1), -1, "mediaplayer")) {
             mediaplayer_changed = subscribe_to_mediaplayer_events(bt, object);
             mediacontrol_changed = subscribe_to_mediacontrol_events(bt, object);
             uint8_t linkType = BT_LINK_TYPE_A2DP;
-            EventTriggerCallback(BT_EVENT_DEVICE_LINK_CONNECTED, &linkType);
+            EventTriggerCallback(BT_EVENT_DEVICE_LINK_CONNECTED,
+                                 (unsigned char *)&linkType);
+
             const gchar *property_name;
             GVariantIter i;
             GVariant *prop_val;
             g_variant_iter_init(&i, properties);
-            while (g_variant_iter_next(&i, "{&sv}", &property_name, &prop_val))
-            {
+            while (g_variant_iter_next(&i, "{&sv}", &property_name, &prop_val)) {
                 bluez_property_value(property_name, prop_val);
+                g_variant_unref(prop_val);
             }
+        }
 
-            g_variant_unref(prop_val);
+        if (strcmp(interface_name, "org.bluez.MediaTransport1") == 0) {
+            bt->activeDevice.a2dpId = 1;
+            LogDebug(LOG_SOURCE_BT, "A2DP profile connected");
+        }
+
+        if (strcmp(interface_name, "org.bluez.MediaPlayer1") == 0) {
+            bt->activeDevice.avrcpId = 1;
+            LogDebug(LOG_SOURCE_BT, "AVRCP profile connected");
+        }
+
+        if (strcmp(interface_name, "org.bluez.HandsfreeGateway1") == 0 ||
+            strcmp(interface_name, "org.bluez.HandsfreeAudioGateway1") == 0) {
+            bt->activeDevice.hfpId = 1;
+            LogDebug(LOG_SOURCE_BT, "HFP profile connected");
         }
         g_variant_unref(properties);
     }
+    g_variant_iter_free(interfaces);
 }
 
 #define BT_ADDRESS_STRING_SIZE 18
+
 static void bluez_device_disappeared(GDBusConnection *sig,
-                const gchar *sender_name,
-                const gchar *object_path,
-                const gchar *interface,
-                const gchar *signal_name,
-                GVariant *parameters,
-                gpointer user_data)
+                                     const gchar *sender_name,
+                                     const gchar *object_path,
+                                     const gchar *interface,
+                                     const gchar *signal_name,
+                                     GVariant *parameters,
+                                     gpointer user_data)
 {
-    BT_t *bt = (BT_t*)user_data;
+    BT_t *bt = (BT_t *)user_data;
 
     GVariantIter *interfaces;
     const char *object;
@@ -348,22 +430,495 @@ static void bluez_device_disappeared(GDBusConnection *sig,
 
     g_variant_get(parameters, "(&oas)", &object, &interfaces);
     LogDebug(LOG_SOURCE_BT, "Device Disconnected: %s", object);
-    while(g_variant_iter_next(interfaces, "s", &interface_name)) {
-        if(g_strstr_len(g_ascii_strdown(interface_name, -1), -1, "device")) {
+    while (g_variant_iter_next(interfaces, "s", &interface_name)) {
+        LogDebug(LOG_SOURCE_BT, "Interface Disconnected: %s", interface_name);
+        if (g_strstr_len(g_ascii_strdown(interface_name, -1), -1, "device")) {
             int i;
             char *tmp = g_strstr_len(object, -1, "dev_") + 4;
-
-            for(i = 0; *tmp != '\0'; i++, tmp++) {
-                if(*tmp == '_') {
+            for (i = 0; *tmp != '\0'; i++, tmp++) {
+                if (*tmp == '_') {
                     address[i] = ':';
                     continue;
                 }
                 address[i] = *tmp;
             }
-            LogDebug(LOG_SOURCE_BT, "\nDevice %s removed\n", address);
+            LogDebug(LOG_SOURCE_BT, "Device %s removed", address);
+            /* Compare with active device */
+            char *active_mac = uint8_array_to_mac(bt->activeDevice.macId);
+
+            if (active_mac && strcmp(active_mac, address) == 0) {
+                LogDebug(LOG_SOURCE_BT,
+                         "Active device %s disconnected — resetting BT state",
+                         address);
+
+                /* Reset state */
+                bt->activeDevice.a2dpId = 0;
+                bt->activeDevice.avrcpId = 0;
+                bt->activeDevice.hfpId  = 0;
+                bt->activeDevice.bleId  = 0;
+                bt->activeDevice.mapId  = 0;
+                bt->activeDevice.pbapId = 0;
+
+                bt->status = BT_STATUS_DISCONNECTED;
+            }
         }
+        if (strcmp(interface_name, "org.bluez.MediaTransport1") == 0) {
+            bt->activeDevice.a2dpId = 0;
+            LogDebug(LOG_SOURCE_BT, "A2DP profile disconnected");
+        }
+
+        if (strcmp(interface_name, "org.bluez.MediaPlayer1") == 0) {
+            bt->activeDevice.avrcpId = 0;
+            LogDebug(LOG_SOURCE_BT, "AVRCP profile disconnected");
+        }
+
+        if (strcmp(interface_name, "org.bluez.HandsfreeGateway1") == 0 ||
+            strcmp(interface_name, "org.bluez.HandsfreeAudioGateway1") == 0) {
+            bt->activeDevice.hfpId = 0;
+            LogDebug(LOG_SOURCE_BT, "HFP profile disconnected");
+        }
+
     }
-    return;
+    g_variant_iter_free(interfaces);
+}
+
+/* ------------------------------------------------------------------------- */
+/* Device connect / disconnect callbacks                                     */
+/* ------------------------------------------------------------------------- */
+
+static void enable_profiles(BT_t *bt);
+
+static void connect_callback(GObject *source_object,
+                             GAsyncResult *res,
+                             gpointer user_data)
+{
+    GError *error = NULL;
+    BT_t *bt = (BT_t *)user_data;
+
+    g_dbus_connection_call_finish(G_DBUS_CONNECTION(source_object), res, &error);
+    if (error) {
+        bt->status = BT_STATUS_DISCONNECTED;
+        EventTriggerCallback(BT_EVENT_DEVICE_DISCONNECTED, NULL);
+        LogError("Error connecting to device: %s", error->message);
+        g_error_free(error);
+    } else {
+        LogDebug(LOG_SOURCE_BT, "CB::Device Connected: %s", bt->activeDevice.deviceName);
+        bt->status = BT_STATUS_CONNECTED;
+        EventTriggerCallback(BT_EVENT_DEVICE_CONNECTED, NULL);
+        enable_profiles(bt);
+    }
+}
+
+static void disconnect_callback(GObject *source_object,
+                                GAsyncResult *res,
+                                gpointer user_data)
+{
+    GError *error = NULL;
+    BT_t *bt = (BT_t *)user_data;
+
+    g_dbus_connection_call_finish(G_DBUS_CONNECTION(source_object), res, &error);
+    if (error) {
+        bt->status = BT_STATUS_CONNECTED;
+        EventTriggerCallback(BT_EVENT_DEVICE_CONNECTED, NULL);
+        LogError("Error disconnecting from device: %s", error->message);
+        g_error_free(error);
+    } else {
+        LogDebug(LOG_SOURCE_BT, "CB::Device Disconnected: %s", bt->activeDevice.deviceName);
+        bt->playbackStatus = BT_AVRCP_STATUS_PAUSED;
+        memset(&bt->activeDevice, 0, sizeof(BTConnection_t));
+        bt->activeDevice = BTConnectionInit();
+        bt->status = BT_STATUS_DISCONNECTED;
+        EventTriggerCallback(BT_EVENT_PLAYBACK_STATUS_CHANGE, NULL);
+        EventTriggerCallback(BT_EVENT_DEVICE_LINK_DISCONNECTED, NULL);
+    }
+}
+
+/* ------------------------------------------------------------------------- */
+/* Device connect / disconnect wrappers                                      */
+/* ------------------------------------------------------------------------- */
+
+static void bt_rpi4_connect_to_device(BT_t *bt, const char *device_address)
+{
+    memcpy(device_addr, device_address, sizeof(device_addr));
+    char device_path[256];
+    snprintf(device_path, sizeof(device_path), "%s%s", DEVICE_PATH_PREFIX, device_addr);
+
+    LogDebug(LOG_SOURCE_BT, "Device.Connect(%s)", device_path);
+
+    g_dbus_connection_call(bt->connection,
+                           BLUEZ_BUS_NAME,
+                           device_path,
+                           DEVICE_INTERFACE,
+                           "Connect",
+                           NULL,
+                           NULL,
+                           G_DBUS_CALL_FLAGS_NONE,
+                           -1,
+                           NULL,
+                           connect_callback,
+                           bt);
+}
+
+static void bt_rpi4_disconnect_from_device(BT_t *bt, int force)
+{
+    (void)force;
+
+    char device_path[256];
+    snprintf(device_path, sizeof(device_path), "%s%s", DEVICE_PATH_PREFIX, device_addr);
+
+    LogDebug(LOG_SOURCE_BT, "Device.Disconnect(%s)", device_path);
+
+    g_dbus_connection_call(bt->connection,
+                           BLUEZ_BUS_NAME,
+                           device_path,
+                           DEVICE_INTERFACE,
+                           "Disconnect",
+                           NULL,
+                           NULL,
+                           G_DBUS_CALL_FLAGS_NONE,
+                           -1,
+                           NULL,
+                           disconnect_callback,
+                           bt);
+}
+
+/* ------------------------------------------------------------------------- */
+/* Profile registration                                                      */
+/* ------------------------------------------------------------------------- */
+
+static void register_profile(BT_t *bt, const char *profile_uuid, const char *profile_path)
+{
+    GError *error = NULL;
+    GVariantBuilder options;
+    g_variant_builder_init(&options, G_VARIANT_TYPE("a{sv}"));
+
+    g_variant_builder_add(&options, "{sv}", "Name", g_variant_new_string("Profile"));
+    g_variant_builder_add(&options, "{sv}", "Role", g_variant_new_string("client"));
+    g_variant_builder_add(&options, "{sv}", "RequireAuthentication", g_variant_new_boolean(FALSE));
+    g_variant_builder_add(&options, "{sv}", "RequireAuthorization", g_variant_new_boolean(FALSE));
+
+    /* Correct order: (OBJECT profile_path, STRING profile_uuid, DICT options) */
+    GVariant *params = g_variant_new("(osa{sv})",
+                                     profile_path,   /* object path */
+                                     profile_uuid,   /* UUID string */
+                                     &options);
+
+    g_dbus_connection_call_sync(bt->connection,
+                                BLUEZ_BUS_NAME,
+                                PROFILEMANAGER_OBJECT_PATH,
+                                PROFILEMANAGER_INTERFACE,
+                                "RegisterProfile",
+                                params,
+                                NULL,
+                                G_DBUS_CALL_FLAGS_NONE,
+                                -1,
+                                NULL,
+                                &error);
+    if (error) {
+        LogError("RegisterProfile(%s at %s) failed: %s",
+                 profile_uuid, profile_path, error->message);
+        g_error_free(error);
+    } else {
+        LogDebug(LOG_SOURCE_BT,
+                 "Registered profile %s at %s",
+                 profile_uuid,
+                 profile_path);
+    }
+}
+
+static void enable_profiles(BT_t *bt)
+{
+    uint8_t linkType;
+
+    linkType = BT_LINK_TYPE_A2DP;
+//    register_profile(bt, A2DP_PROFILE_UUID, A2DP_PROFILE_PATH);
+    EventTriggerCallback(BT_EVENT_DEVICE_LINK_CONNECTED,
+                         (unsigned char *)&linkType);
+
+    linkType = BT_LINK_TYPE_HFP;
+//    register_profile(bt, HFP_PROFILE_UUID, HFP_PROFILE_PATH);
+    EventTriggerCallback(BT_EVENT_DEVICE_LINK_CONNECTED,
+                         (unsigned char *)&linkType);
+
+    linkType = BT_LINK_TYPE_AVRCP;
+//    register_profile(bt, AVRCP_PROFILE_UUID, AVRCP_PROFILE_PATH);
+    EventTriggerCallback(BT_EVENT_DEVICE_LINK_CONNECTED,
+                         (unsigned char *)&linkType);
+}
+
+/* ------------------------------------------------------------------------- */
+/* Public commands: Connect / List / Disconnect                              */
+/* ------------------------------------------------------------------------- */
+
+void RPI4CommandConnect(BT_t *bt, BTPairedDevice_t *dev)
+{
+    /* Avoid spamming Connect() if we’re already in flight or up */
+    if (bt->status == BT_STATUS_CONNECTING || bt->status == BT_STATUS_CONNECTED) {
+        LogDebug(LOG_SOURCE_BT,
+                 "RPI4CommandConnect: ignoring request, status=%u",
+                 bt->status);
+        return;
+    }
+
+    const uint8_t *device_address = dev->macId;
+    memcpy(bt->activeDevice.macId, dev->macId, BT_MAC_ID_LEN);
+    bt->status = BT_STATUS_CONNECTING;
+
+    char *mac_str = uint8_array_to_mac(device_address);
+    if (!mac_str) {
+        LogError("RPI4CommandConnect: failed to allocate MAC string");
+        return;
+    }
+
+    LogDebug(LOG_SOURCE_BT, "Connecting to %s (%s).", dev->deviceName, mac_str);
+    UtilsStrncpy(bt->activeDevice.deviceName, dev->deviceName, BT_DEVICE_NAME_LEN);
+    bt_rpi4_connect_to_device(bt, mac_str);
+    free(mac_str);
+}
+
+static void bluez_list_devices(GObject *source_object,
+                               GAsyncResult *res,
+                               gpointer data)
+{
+    GDBusConnection *con = G_DBUS_CONNECTION(source_object);
+    BT_t *bt = (BT_t *)data;
+    GError *error = NULL;
+    GVariant *result = g_dbus_connection_call_finish(con, res, &error);
+
+    if (error) {
+        LogError("GetManagedObjects failed: %s", error->message);
+        g_error_free(error);
+        return;
+    }
+    if (!result) {
+        LogError("GetManagedObjects returned NULL");
+        return;
+    }
+
+    /* Notify system that device enumeration has started */
+    EventTriggerCallback(BT_EVENT_DEVICE_FOUND, 0);
+
+    /* Extract the dictionary of objects */
+    GVariant *objects = g_variant_get_child_value(result, 0);
+    g_variant_unref(result);
+
+    GVariantIter iter_objects;
+    const gchar *object_path;
+    GVariant *ifaces_and_properties;
+
+    g_variant_iter_init(&iter_objects, objects);
+
+    uint8_t number = 1;
+
+    while (g_variant_iter_next(&iter_objects,
+                               "{&o@a{sa{sv}}}",
+                               &object_path,
+                               &ifaces_and_properties))
+    {
+        GVariantIter iter_ifaces;
+        const gchar *iface_name;
+        GVariant *properties;
+
+        g_variant_iter_init(&iter_ifaces, ifaces_and_properties);
+
+        while (g_variant_iter_next(&iter_ifaces,
+                                   "{&s@a{sv}}",
+                                   &iface_name,
+                                   &properties))
+        {
+            /* Only process Device1 interfaces */
+            if (g_strstr_len(g_ascii_strdown(iface_name, -1), -1, "device"))
+            {
+                gboolean connected = FALSE;
+
+                GVariantIter iter_props;
+                const gchar *property_name;
+                GVariant *prop_val;
+
+                char deviceName[BT_DEVICE_NAME_LEN] = {0};
+                uint8_t macId[6] = {0};
+
+                g_variant_iter_init(&iter_props, properties);
+
+                while (g_variant_iter_next(&iter_props,
+                                           "{&sv}",
+                                           &property_name,
+                                           &prop_val))
+                {
+                    bluez_property_value(property_name, prop_val);
+
+                    if (strcmp(property_name, "Connected") == 0) {
+                        connected = g_variant_get_boolean(prop_val);
+                    } else if (strcmp(property_name, "Address") == 0) {
+                        mac_to_uint8_array(g_variant_get_string(prop_val, NULL), macId);
+                    }
+                    else if (strcmp(property_name, "Name") == 0) {
+                        UtilsStrncpy(deviceName,
+                                     g_variant_get_string(prop_val, NULL),
+                                     BT_DEVICE_NAME_LEN);
+                    }
+
+                    g_variant_unref(prop_val);
+                }
+
+                /* Register paired device */
+                if (macId[0] != 0 || macId[1] != 0) {
+                    if (connected) {
+                        memcpy(bt->activeDevice.macId, macId, BT_MAC_ID_LEN);
+                        bt->status = BT_STATUS_CONNECTED;
+                        EventTriggerCallback(BT_EVENT_DEVICE_CONNECTED, 0);
+                    } else {
+                        BTPairedDeviceInit(bt, macId, deviceName, number++);
+                    }
+                }
+            }
+
+            g_variant_unref(properties);
+        }
+
+        g_variant_unref(ifaces_and_properties);
+    }
+
+    g_variant_unref(objects);
+}
+
+void RPI4CommandList(BT_t *bt)
+{
+    g_dbus_connection_call(bt->connection,
+                           BLUEZ_BUS_NAME,
+                           "/",
+                           "org.freedesktop.DBus.ObjectManager",
+                           "GetManagedObjects",
+                           NULL,
+                           G_VARIANT_TYPE("(a{oa{sa{sv}}})"),
+                           G_DBUS_CALL_FLAGS_NONE,
+                           -1,
+                           NULL,
+                           bluez_list_devices,
+                           bt);
+    LogDebug(LOG_SOURCE_BT, "Listing paired devices.");
+}
+
+void RPI4CommandDisconnect(BT_t *bt)
+{
+    char *mac_str = uint8_array_to_mac(bt->activeDevice.macId);
+    if (!mac_str) {
+        LogError("RPI4CommandDisconnect: failed to allocate MAC string");
+        return;
+    }
+    LogDebug(LOG_SOURCE_BT, "Disconnecting from %s (%s).",
+             bt->activeDevice.deviceName,
+             mac_str);
+    free(mac_str);
+    bt_rpi4_disconnect_from_device(bt, 0);
+}
+
+/* ------------------------------------------------------------------------- */
+/* Subscriptions for device / interface events                               */
+/* ------------------------------------------------------------------------- */
+
+guint subscribe_to_bluetooth_events(BT_t *bt, GMainLoop *loop)
+{
+    (void)loop;
+    LogDebug(LOG_SOURCE_BT, "Subscribed to BT events");
+    return g_dbus_connection_signal_subscribe(bt->connection,
+                                              BLUEZ_BUS_NAME,
+                                              "org.freedesktop.DBus.Properties",
+                                              PROPERTIES_CHANGED_SIGNAL,
+                                              NULL,
+                                              DEVICE_INTERFACE,
+                                              G_DBUS_SIGNAL_FLAGS_NONE,
+                                              on_properties_changed,
+                                              bt,
+                                              NULL);
+}
+
+guint subscribe_to_added_bluetooth_interface(BT_t *bt, GMainLoop *loop)
+{
+    (void)loop;
+    LogDebug(LOG_SOURCE_BT, "Subscribed to InterfacesAdded events");
+    return g_dbus_connection_signal_subscribe(bt->connection,
+                                              BLUEZ_BUS_NAME,
+                                              "org.freedesktop.DBus.ObjectManager",
+                                              "InterfacesAdded",
+                                              NULL,
+                                              NULL,
+                                              G_DBUS_SIGNAL_FLAGS_NONE,
+                                              bluez_device_appeared,
+                                              bt,
+                                              NULL);
+}
+
+guint subscribe_to_removed_bluetooth_interface(BT_t *bt, GMainLoop *loop)
+{
+    (void)loop;
+    LogDebug(LOG_SOURCE_BT, "Subscribed to InterfacesRemoved events");
+    return g_dbus_connection_signal_subscribe(bt->connection,
+                                              BLUEZ_BUS_NAME,
+                                              "org.freedesktop.DBus.ObjectManager",
+                                              "InterfacesRemoved",
+                                              NULL,
+                                              NULL,
+                                              G_DBUS_SIGNAL_FLAGS_NONE,
+                                              bluez_device_disappeared,
+                                              bt,
+                                              NULL);
+}
+
+/* ------------------------------------------------------------------------- */
+/* Main loop / signal handling                                               */
+/* ------------------------------------------------------------------------- */
+
+void RPI4Process(BT_t *bt)
+{
+    LogDebug(LOG_SOURCE_BT, "BT thread starting (no internal GMainLoop)");
+
+    /* Use the default context (owned by main thread) */
+    GMainContext *ctx = g_main_context_default();
+
+    /* Subscribe to D-Bus signals — these attach to the default context */
+    guint prop_changed  = subscribe_to_bluetooth_events(bt, NULL);
+    guint iface_added   = subscribe_to_added_bluetooth_interface(bt, NULL);
+    guint iface_removed = subscribe_to_removed_bluetooth_interface(bt, NULL);
+
+    /* Initial commands */
+    RPI4CommandList(bt);
+
+    /* Worker loop — no GLib loop here */
+    while (!shutting_down) {
+        /* If you need to wake the main loop, do it here */
+        g_main_context_wakeup(ctx);
+
+        /* Sleep a bit to avoid busy looping */
+        g_usleep(10000);
+    }
+
+    LogDebug(LOG_SOURCE_BT, "BT thread shutting down, cleaning up");
+
+    /* Disconnect if needed */
+    if (bt->status == BT_STATUS_CONNECTED) {
+        bt_rpi4_disconnect_from_device(bt, 1);
+    }
+
+    /* Unsubscribe from all D-Bus signals */
+    g_dbus_connection_signal_unsubscribe(bt->connection, prop_changed);
+    g_dbus_connection_signal_unsubscribe(bt->connection, iface_added);
+    g_dbus_connection_signal_unsubscribe(bt->connection, iface_removed);
+
+    if (mediaplayer_changed) {
+        g_dbus_connection_signal_unsubscribe(bt->connection, mediaplayer_changed);
+        mediaplayer_changed = 0;
+    }
+
+    if (mediacontrol_changed) {
+        g_dbus_connection_signal_unsubscribe(bt->connection, mediacontrol_changed);
+        mediacontrol_changed = 0;
+    }
+
+    /* Release D-Bus connection */
+    g_object_unref(bt->connection);
+
+    LogDebug(LOG_SOURCE_BT, "BT thread terminated cleanly");
 }
 
 void RPI4CommandBtState(BT_t *bt, uint8_t connectable, uint8_t discoverable) {
@@ -396,297 +951,9 @@ void RPI4CommandRedial(BT_t *bt) {
     LogDebug(LOG_SOURCE_BT, "Redialing last number.");
 }
 
-// Callback function to handle the result of the disconnection attempt
-void disconnect_callback(GDBusConnection *connection, GAsyncResult *res, gpointer user_data) {
-    GError *error = NULL;
-    BT_t *bt = (BT_t*)user_data;
-
-    // Finish the asynchronous call
-    g_dbus_connection_call_finish(connection, res, &error);
-
-    if (error) {
-        bt->status = BT_STATUS_CONNECTED;
-        EventTriggerCallback(BT_EVENT_DEVICE_CONNECTED, 0);
-        LogError("Error disconnecting from device: %s\n", error->message);
-        g_error_free(error);
-    } else {
-        LogDebug(LOG_SOURCE_BT, "CB::Device Disconnected: %s", bt->activeDevice.deviceName);
-        bt->playbackStatus = BT_AVRCP_STATUS_PAUSED;
-        // Notify the world that the device disconnected
-        memset(&bt->activeDevice, 0, sizeof(BTConnection_t));
-        bt->activeDevice = BTConnectionInit();
-        bt->status = BT_STATUS_DISCONNECTED;
-        EventTriggerCallback(BT_EVENT_PLAYBACK_STATUS_CHANGE, 0);
-        EventTriggerCallback(BT_EVENT_DEVICE_LINK_DISCONNECTED, 0);
-    }
-}
-
-// Function to disconnect from a connected Bluetooth device
-void disconnect_from_device(BT_t *bt, uint8_t shutdown) {
-    const char *device_address = uint8_array_to_mac(bt->activeDevice.macId);
-    memcpy(device_addr, device_address, sizeof(device_addr));
-    char device_path[256];
-    snprintf(device_path, sizeof(device_path), "%s%s", DEVICE_PATH_PREFIX, device_addr);
-    GError *error = NULL;
-    if (bt->status == BT_STATUS_CONNECTED) {
-        if (shutdown == 1) {
-            g_dbus_connection_call_sync(
-                bt->connection,
-                BLUEZ_BUS_NAME,                  // Destination bus name
-                device_path,                  // Object path
-                DEVICE_INTERFACE,          // Interface name
-                "Disconnect",                    // Method name
-                NULL,                         // Input parameters (none)
-                NULL,                         // Expected output parameters (none)
-                G_DBUS_CALL_FLAGS_NONE,      // Flags
-                -1,                           // Timeout
-                NULL,                         // Cancellable
-                &error                         // Error
-            );
-            
-            if (error) {
-                bt->status = BT_STATUS_CONNECTED;
-                EventTriggerCallback(BT_EVENT_DEVICE_CONNECTED, 0);
-                LogError("Error disconnecting from device: %s\n", error->message);
-                g_error_free(error);
-            } else {
-                LogDebug(LOG_SOURCE_BT, "Device Disconnected: %s", bt->activeDevice.deviceName);
-                bt->playbackStatus = BT_AVRCP_STATUS_PAUSED;
-                // Notify the world that the device disconnected
-                memset(&bt->activeDevice, 0, sizeof(BTConnection_t));
-                bt->activeDevice = BTConnectionInit();
-                bt->status = BT_STATUS_DISCONNECTED;
-                EventTriggerCallback(BT_EVENT_PLAYBACK_STATUS_CHANGE, 0);
-                EventTriggerCallback(BT_EVENT_DEVICE_LINK_DISCONNECTED, 0);
-            }
-        } else {
-            g_dbus_connection_call(
-                bt->connection,
-                BLUEZ_BUS_NAME,                  // Destination bus name
-                device_path,                  // Object path
-                DEVICE_INTERFACE,          // Interface name
-                "Disconnect",                    // Method name
-                NULL,                         // Input parameters (none)
-                NULL,                         // Expected output parameters (none)
-                G_DBUS_CALL_FLAGS_NONE,      // Flags
-                -1,                           // Timeout
-                NULL,                         // Cancellable
-                (GAsyncReadyCallback)disconnect_callback,             // Callback function
-                (gpointer)bt      // User data (device address)
-            );
-        }
-    }
-}
-
-void RPI4CommandDisconnect(BT_t *bt) {
-    const char *mac_str = uint8_array_to_mac(bt->activeDevice.macId);
-    LogDebug(LOG_SOURCE_BT, "Disconnecting from %s (%s).", bt->activeDevice.deviceName, mac_str);
-    disconnect_from_device(bt, 0);
-}
-
-// Function to register a profile
-void register_profile(BT_t *bt, const char *profile_uuid, uint8_t linkType) {
-    GError *error = NULL;
-
-    // Call the RegisterProfile method on the ProfileManager interface
-    g_dbus_connection_call_sync(
-        bt->connection,
-        BLUEZ_BUS_NAME,                  // Destination bus name
-        ADAPTER_OBJECT_PATH,            // Object path for the adapter
-        PROFILEMANAGER_INTERFACE,   // Interface name
-        "RegisterProfile",             // Method name
-        g_variant_new("(ss)", profile_uuid, "Profile"), // Input parameters (UUID and options)
-        NULL,                          // Expected output parameters (none)
-        G_DBUS_CALL_FLAGS_NONE,        // Flags
-        -1,                            // Timeout
-        NULL,                          // Cancellable
-        &error                         // Error
-    );
-
-    if (error) {
-        LogError("Error registering profile %s: %s\n", profile_uuid, error->message);
-        g_error_free(error);
-    } else {
-        EventTriggerCallback(BT_EVENT_DEVICE_LINK_CONNECTED, &linkType);
-        LogDebug(LOG_SOURCE_BT, "Successfully registered profile %s\n", profile_uuid);
-    }
-}
-
-
-// Function to connect to a profile
-void connect_profile(BT_t *bt, const char *profile_uuid) {
-    char profile_path[256];
-    snprintf(profile_path, sizeof(profile_path), "/org/bluez/hci0/dev_%s/profile_%s", device_addr, profile_uuid);
-
-    GError *error = NULL;
-
-    // Call the Connect method on the Profile1 interface
-    g_dbus_connection_call_sync(
-        bt->connection,
-        BLUEZ_BUS_NAME,                  // Destination bus name
-        profile_path,                 // Object path for the profile
-        "org.bluez.Profile1",         // Interface name
-        "NewConnection",                    // Method name
-        NULL,                         // Input parameters (none)
-        NULL,                         // Expected output parameters (none)
-        G_DBUS_CALL_FLAGS_NONE,      // Flags
-        -1,                           // Timeout
-        NULL,                         // Cancellable
-        &error                        // Error
-    );
-
-    if (error) {
-        LogError("Error connecting to profile %s: %s\n", profile_path, error->message);
-        g_error_free(error);
-    } else {
-        LogDebug(LOG_SOURCE_BT, "Successfully connected to profile %s for device %s\n", profile_uuid, device_addr);
-    }
-}
-
-// Function to enable A2DP and HFP profiles
-void enable_profiles(BT_t *bt) {
-    // Register A2DP Profile
-    uint8_t linkType = BT_LINK_TYPE_A2DP;
-    //register_profile(bt, A2DP_PROFILE_UUID, linkType);
-    connect_profile(bt, A2DP_PROFILE_UUID);
-
-    // Register HFP Profile
-    linkType = BT_LINK_TYPE_HFP;
-    //register_profile(bt, HFP_PROFILE_UUID, linkType);
-    connect_profile(bt, HFP_PROFILE_UUID);
-
-    // Register VRP Profile
-    linkType = BT_LINK_TYPE_AVRCP;
-    //register_profile(bt, VRP_PROFILE_UUID, linkType);
-    connect_profile(bt, VRP_PROFILE_UUID);
-}
-
-// Callback function to handle the result of the connection attempt
-void connect_callback(GDBusConnection *connection, GAsyncResult *res, gpointer user_data) {
-    GError *error = NULL;
-    BT_t *bt = (BT_t*)user_data;
-
-    // Finish the asynchronous call
-    g_dbus_connection_call_finish(connection, res, &error);
-
-    if (error) {
-        bt->status = BT_STATUS_DISCONNECTED;
-        EventTriggerCallback(BT_EVENT_DEVICE_DISCONNECTED, 0);
-        LogError("Error connecting to device: %s\n", error->message);
-        g_error_free(error);
-    } else {
-        LogDebug(LOG_SOURCE_BT, "CB::Device Connected: %s", bt->activeDevice.deviceName);
-        bt->status = BT_STATUS_CONNECTED;
-        EventTriggerCallback(BT_EVENT_DEVICE_CONNECTED, 0);
-        // Call enable_profiles after successful connection
-        enable_profiles(bt);
-    }
-}
-
-// Function to connect to a paired Bluetooth device
-void connect_to_device(BT_t *bt, const char *device_address) {
-    memcpy(device_addr, device_address, sizeof(device_addr));
-    char device_path[256];
-    snprintf(device_path, sizeof(device_path), "%s%s", DEVICE_PATH_PREFIX, device_addr);
-
-    // Call the Connect method on the Device1 interface asynchronously
-    g_dbus_connection_call(
-        bt->connection,
-        BLUEZ_BUS_NAME,                  // Destination bus name
-        device_path,                  // Object path
-        DEVICE_INTERFACE,          // Interface name
-        "Connect",                    // Method name
-        NULL,                         // Input parameters (none)
-        NULL,                         // Expected output parameters (none)
-        G_DBUS_CALL_FLAGS_NONE,      // Flags
-        -1,                           // Timeout
-        NULL,                         // Cancellable
-        (GAsyncReadyCallback)connect_callback,             // Callback function
-        (gpointer)bt      // User data (device address)
-    );
-}
-
-void RPI4CommandConnect(BT_t *bt, BTPairedDevice_t *dev) {
-    const uint8_t* device_address = dev->macId;
-    memcpy(bt->activeDevice.macId, dev->macId, BT_MAC_ID_LEN);
-    bt->status = BT_STATUS_CONNECTING;
-    const char *mac_str = uint8_array_to_mac(device_address);
-    LogDebug(LOG_SOURCE_BT, "Connecting to %s (%s).", dev->deviceName, mac_str);
-    connect_to_device(bt, mac_str);
-}
-
 void RPI4CommandGetMetadata(BT_t *bt) {
     bluez_adapter_call_method(bt->connection, "GetMetadata", NULL, NULL);
     LogDebug(LOG_SOURCE_BT, "Getting metadata.");
-}
-
-static void bluez_list_devices(GDBusConnection *con,
-                GAsyncResult *res,
-                gpointer data)
-{
-    BT_t *bt = (BT_t*)data;
-    GVariant *result = NULL;
-    GVariantIter i;
-    const gchar *object_path;
-    GVariant *ifaces_and_properties;
-
-    result = g_dbus_connection_call_finish(con, res, NULL);
-    if(result == NULL)
-        LogError("Unable to get result for GetManagedObjects\n");
-
-    /* Parse the result */
-    if(result) {
-        EventTriggerCallback(BT_EVENT_DEVICE_FOUND, 0);
-        result = g_variant_get_child_value(result, 0);
-        g_variant_iter_init(&i, result);
-        uint8_t number = 1;
-        while(g_variant_iter_next(&i, "{&o@a{sa{sv}}}", &object_path, &ifaces_and_properties)) {
-            const gchar *interface_name;
-            GVariant *properties;
-            GVariantIter ii;
-            g_variant_iter_init(&ii, ifaces_and_properties);
-            while(g_variant_iter_next(&ii, "{&s@a{sv}}", &interface_name, &properties)) {
-                if(g_strstr_len(g_ascii_strdown(interface_name, -1), -1, "device")) {
-                    //g_print("%d - [ %s ]\n", number, object_path);
-                     const gchar *property_name;
-                    GVariantIter iii;
-                    GVariant *prop_val;
-                    g_variant_iter_init(&iii, properties);
-                    char deviceName[12];
-                    uint8_t macId[6];
-                    while(g_variant_iter_next(&iii, "{&sv}", &property_name, &prop_val)) {
-                        bluez_property_value(property_name, prop_val);
-                        if (strcmp(property_name, "Address") == 0) {
-                            mac_to_uint8_array(g_variant_get_string(prop_val, NULL), macId);
-                        } else if (strcmp(property_name, "Name") == 0) {
-                            strcpy(deviceName, g_variant_get_string(prop_val, NULL));
-                        }
-                    }
-                    g_variant_unref(prop_val);
-                    BTPairedDeviceInit(bt, macId, deviceName, number++);
-                }
-                g_variant_unref(properties);
-            }
-            g_variant_unref(ifaces_and_properties);
-        }
-        g_variant_unref(result);
-    }
-}
-
-void RPI4CommandList(BT_t *bt) {
-    g_dbus_connection_call(bt->connection,
-        BLUEZ_BUS_NAME,
-        "/",
-        "org.freedesktop.DBus.ObjectManager",
-        "GetManagedObjects",
-        NULL,
-        G_VARIANT_TYPE("(a{oa{sa{sv}}})"),
-        G_DBUS_CALL_FLAGS_NONE,
-        -1,
-        NULL,
-        (GAsyncReadyCallback)bluez_list_devices,
-        bt);
-    LogDebug(LOG_SOURCE_BT, "Listing paired devices.");
 }
 
 void RPI4CommandPause(BT_t *bt) {
@@ -757,90 +1024,5 @@ void RPI4CommandStatusAVRCP(BT_t *bt) {
 void RPI4CommandToggleVR(BT_t *bt) {
     bluez_adapter_call_method(bt->connection, "ToggleVoiceRecognition", NULL, NULL);
     LogDebug(LOG_SOURCE_BT, "Voice recognition toggled.\n");
-}
-
-guint subscribe_to_bluetooth_events(BT_t *bt, GMainLoop *loop) {
-    LogDebug(LOG_SOURCE_BT, "Subscribed to BT events");
-    return g_dbus_connection_signal_subscribe(bt->connection,
-            BLUEZ_BUS_NAME,
-            "org.freedesktop.DBus.Properties",
-            PROPERTIES_CHANGED_SIGNAL,
-            ADAPTER_OBJECT_PATH,
-            ADAPTER_INTERFACE,
-            G_DBUS_SIGNAL_FLAGS_NONE,
-            on_properties_changed,
-            bt,
-            NULL);
-}
-
-guint subscribe_to_added_bluetooth_interface(BT_t *bt, GMainLoop *loop) {
-    LogDebug(LOG_SOURCE_BT, "Subscribed to InterfacesAdded events");
-    return g_dbus_connection_signal_subscribe(bt->connection,
-            BLUEZ_BUS_NAME,
-            "org.freedesktop.DBus.ObjectManager",
-            "InterfacesAdded",
-            NULL,
-            NULL,
-            G_DBUS_SIGNAL_FLAGS_NONE,
-            bluez_device_appeared,
-            bt,
-            NULL);
-}
-
-guint subscribe_to_removed_bluetooth_interface(BT_t *bt, GMainLoop *loop) {
-    LogDebug(LOG_SOURCE_BT, "Subscribed to InterfacesRemoved events");
-    return g_dbus_connection_signal_subscribe(bt->connection,
-            BLUEZ_BUS_NAME,
-            "org.freedesktop.DBus.ObjectManager",
-            "InterfacesRemoved",
-            NULL,
-            NULL,
-            G_DBUS_SIGNAL_FLAGS_NONE,
-            bluez_device_disappeared,
-            bt,
-            NULL);
-}
-
-gboolean on_loop_idle(gpointer user_data)
-{
-    if (loop_exit == TRUE) {
-        GMainLoop *loop = (GMainLoop*)user_data;
-        g_main_loop_quit(loop);
-        return G_SOURCE_REMOVE;
-    }
-    return G_SOURCE_CONTINUE;
-}
-
-// Signal handler for SIGINT
-void handle_sigint(int signo) {
-    LogDebug(LOG_SOURCE_BT, "\nCaught signal %d, disconnecting from device...\n", signo);
-    if (signo == SIGINT) loop_exit = TRUE;
-}
-
-void RPI4Process(BT_t *bt) {
-    LogDebug(LOG_SOURCE_BT, "Processing BT events");
-    // Subscribe to Bluetooth events
-    GMainLoop *loop = g_main_loop_new(NULL, FALSE);
-    // Set up signal handler for SIGINT
-    signal(SIGINT, handle_sigint);
-    guint prop_changed = subscribe_to_bluetooth_events(bt, loop);
-    guint iface_added = subscribe_to_added_bluetooth_interface(bt, loop);
-    guint iface_removed = subscribe_to_removed_bluetooth_interface(bt, loop);
-
-    RPI4CommandList(bt);
-
-    g_idle_add(on_loop_idle, loop);
-    g_main_loop_run(loop);
-
-    disconnect_from_device(bt, 1);
-
-    g_dbus_connection_signal_unsubscribe(bt->connection, prop_changed);
-    g_dbus_connection_signal_unsubscribe(bt->connection, iface_added);
-    g_dbus_connection_signal_unsubscribe(bt->connection, iface_removed);
-    g_dbus_connection_signal_unsubscribe(bt->connection, mediaplayer_changed);
-    g_dbus_connection_signal_unsubscribe(bt->connection, mediacontrol_changed);
-    g_main_loop_unref(loop);
-    g_object_unref(bt->connection);
-    exit(0);
 }
 

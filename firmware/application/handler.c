@@ -78,11 +78,6 @@ void HandlerUIInitiateConnection(void *ctx, unsigned char *deviceId)
     }
     context->btSelectedDevice = (int8_t) *deviceId;
     ConfigSetBytes(CONFIG_SETTING_LAST_CONNECTED_DEVICE_MAC,(uint8_t *)&context->bt->pairedDevices[context->btSelectedDevice].macId, BT_MAC_ID_LEN);
-    /*ConfigSetBytes(
-        CONFIG_SETTING_LAST_CONNECTED_DEVICE_MAC,
-        context->bt->pairedDevices[context->btSelectedDevice].macId,
-        BT_MAC_ID_LEN
-    );*/
     BTCommandSetConnectable(context->bt, BT_STATE_ON);
 }
 

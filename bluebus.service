@@ -1,0 +1,19 @@
+[Unit]
+Description = BlueBus daemon
+
+After  = network.target
+
+
+[Service]
+KillMode=control-group
+TimeoutStopSec=10
+KillSignal=SIGTERM
+WorkingDirectory = /home/pi/Apps/BlueBerry/firmware/application
+ExecStart = /home/pi/Apps/BlueBerry/firmware/application/application
+Environment="LD_LIBRARY_PATH=/usr/local/lib"
+Restart    = always
+RestartSec = 5
+
+
+[Install]
+WantedBy = multi-user.target

@@ -8,6 +8,7 @@
 #include "log.h"
 #include "timer.h"
 #include "ibus.h"
+#include "shutdown.h"
 #include <sys/sysmacros.h>
 
 static const uint8_t IBUS_SES_NAV_ZOOM_CONSTANT[IBUS_SES_ZOOM_LEVELS] = {
@@ -773,7 +774,7 @@ void *IBusProcess(void *args)
     }
 
     /* ---- MAIN LOOP ---- */
-    while (ibus->running) {
+    while (!shutting_down) {
         /* ---- WAIT FOR RX DATA (select) ---- */
         fd_set rfds;
         FD_ZERO(&rfds);
@@ -1281,6 +1282,7 @@ void IBusCommandGetModuleStatus(
     uint8_t system
 ) {
     uint8_t msg[] = {0x01};
+    LogDebug(LOG_SOURCE_IBUS, "Request module status - %i", system);
     IBusSendCommand(ibus, source, system, msg, 1);
 }
 

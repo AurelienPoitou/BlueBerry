@@ -14,6 +14,7 @@
 #define LOG_SOURCE_IBUS CONFIG_DEVICE_LOG_IBUS
 #define LOG_SOURCE_SYSTEM CONFIG_DEVICE_LOG_SYSTEM
 #define LOG_SOURCE_UI CONFIG_DEVICE_LOG_UI
+#define LOG_SOURCE_CONFIG CONFIG_DEVICE_LOG_CONFIG
 
 void LogMessage(const char *, const char *);
 void LogRaw(const char *, ...);
