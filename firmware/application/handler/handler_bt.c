@@ -961,9 +961,6 @@ void HandlerTimerBTRPI4State(void *ctx)
         context->btBootState == HANDLER_BT_BOOT_OK
     ) {
         LogWarning("RPI4 Boot Failure");
-        uint16_t bootFailCount = ConfigGetBC127BootFailures();
-        bootFailCount++;
-        ConfigSetBC127BootFailures(bootFailCount);
         IBusCommandTELSetLED(context->ibus, IBUS_TEL_LED_STATUS_RED_BLINKING);
         context->btBootState = HANDLER_BT_BOOT_FAIL;
     }

@@ -1,19 +1,73 @@
-#include <stdint.h>
 #include <stdio.h>
-#include <string.h>
+#include <stdint.h>
+#include <unistd.h>   // fsync
+#include <fcntl.h>    // fileno
 #include "config.h"
 #include "log.h"
 
-#define CONFIG_FILE "config.bin"
+#define CONFIG_FILE      "config.bin"
+#define CONFIG_FILE_TMP  "config.bin.tmp"
 
 uint8_t CONFIG_SETTING_CACHE[CONFIG_SETTING_CACHE_SIZE] = {0};
 uint8_t CONFIG_VALUE_CACHE[CONFIG_VALUE_CACHE_SIZE] = {0};
 
-static inline uint8_t ConfigGetByte(uint8_t address) {
+static int ConfigWriteSettingsAtomic(void)
+{
+    FILE *file = fopen(CONFIG_FILE_TMP, "w+b");
+    if (!file) {
+        LogError("Failed to open temp config file");
+        return -1;
+    }
+
+    size_t written = fwrite(CONFIG_SETTING_CACHE, 1,
+                            CONFIG_SETTING_CACHE_SIZE, file);
+    if (written != CONFIG_SETTING_CACHE_SIZE) {
+        LogError("Failed to write settings to temp file");
+        fclose(file);
+        return -1;
+    }
+
+    if (fflush(file) != 0) {
+        LogError("fflush failed on temp config file");
+        fclose(file);
+        return -1;
+    }
+
+    int fd = fileno(file);
+    if (fd < 0) {
+        LogError("fileno failed on temp config file");
+        fclose(file);
+        return -1;
+    }
+
+    if (fsync(fd) != 0) {
+        LogError("fsync failed on temp config file");
+        fclose(file);
+        return -1;
+    }
+
+    if (fclose(file) != 0) {
+        LogError("fclose failed on temp config file");
+        return -1;
+    }
+
+    if (rename(CONFIG_FILE_TMP, CONFIG_FILE) != 0) {
+        LogError("rename(%s -> %s) failed",
+                 CONFIG_FILE_TMP, CONFIG_FILE);
+        return -1;
+    }
+
+    return 0;
+}
+
+static inline uint8_t ConfigGetByte(uint8_t address)
+{
     uint8_t value = 0;
+
     if (address < CONFIG_SETTING_CACHE_SIZE) {
         value = CONFIG_SETTING_CACHE[address];
     }
+
     if (value == 0x00) {
         FILE *file = fopen(CONFIG_FILE, "rb");
         if (file) {
@@ -21,37 +75,44 @@ static inline uint8_t ConfigGetByte(uint8_t address) {
             fread(&value, sizeof(uint8_t), 1, file);
             fclose(file);
         }
+
         if (value == 0xFF) {
             value = 0x00;
         }
+
         if (address < CONFIG_SETTING_CACHE_SIZE) {
             CONFIG_SETTING_CACHE[address] = value;
         }
     }
-//    LogDebug(LOG_SOURCE_CONFIG, "Get Byte %i = %i", address, value);
+
     return value;
 }
 
-static inline void ConfigSetByte(uint8_t address, uint8_t value) {
+static inline void ConfigSetByte(uint8_t address, uint8_t value)
+{
+    LogDebug(LOG_SOURCE_CONFIG, "Set Byte %u to %u", address, value);
+
     if (address < CONFIG_SETTING_CACHE_SIZE) {
+        // Update settings cache
         CONFIG_SETTING_CACHE[address] = value;
+
+        // Crash-safe atomic write of the settings region
+        if (ConfigWriteSettingsAtomic() != 0) {
+            LogError("Failed to persist settings atomically at %u", address);
+        }
+        return;
     }
+
+    // Addresses outside the settings cache: keep old behavior (direct write)
     FILE *file = fopen(CONFIG_FILE, "r+b");
-    LogDebug(LOG_SOURCE_CONFIG, "Set Byte %i to %i", address, value);
     if (file) {
         fseek(file, address, SEEK_SET);
         fwrite(&value, sizeof(uint8_t), 1, file);
         fclose(file);
+    } else {
+        // Optional: if you want, you can also create the file here
+        LogError("Failed to open config file for direct write at %u", address);
     }
-}
-
-uint16_t ConfigGetBC127BootFailures() {
-    uint8_t lsb = ConfigGetByte(CONFIG_INFO_BC127_BOOT_FAIL_COUNTER_LSB);
-    uint8_t msb = ConfigGetByte(CONFIG_INFO_BC127_BOOT_FAIL_COUNTER_MSB);
-    if (lsb == 0xFF && msb == 0xFF) {
-        return 0;
-    }
-    return (msb << 8) + lsb;
 }
 
 void ConfigGetBytes(uint8_t address, uint8_t *data, uint8_t size) {
@@ -215,11 +276,6 @@ void ConfigGetVehicleIdentity(uint8_t *vin) {
     for (uint8_t i = 0; i < 5; i++) {
         vin[i] = ConfigGetByte(vinAddress[i]);
     }
-}
-
-void ConfigSetBC127BootFailures(uint16_t failureCount) {
-    ConfigSetByte(CONFIG_INFO_BC127_BOOT_FAIL_COUNTER_MSB, failureCount >> 8);
-    ConfigSetByte(CONFIG_INFO_BC127_BOOT_FAIL_COUNTER_LSB, failureCount & 0xFF);
 }
 
 void ConfigSetBootloaderMode(uint8_t bootloaderMode) {

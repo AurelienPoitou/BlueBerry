@@ -177,7 +177,6 @@
 #define CONFIG_SETTING_CACHE_SIZE CONFIG_SETTING_END_ADDRESS
 #define CONFIG_VALUE_CACHE_SIZE (CONFIG_VALUE_END_ADDRESS - CONFIG_VALUE_START_ADDRESS + 1)
 
-uint16_t ConfigGetBC127BootFailures();
 uint8_t ConfigGetBuildWeek();
 uint8_t ConfigGetBuildYear();
 void ConfigGetBytes(uint8_t, uint8_t *, uint8_t);
@@ -205,7 +204,6 @@ uint8_t ConfigGetValue(uint8_t);
 uint8_t ConfigGetVehicleType();
 void ConfigGetVehicleIdentity(uint8_t *);
 void ConfigGetString(uint8_t, char *, uint8_t);
-void ConfigSetBC127BootFailures(uint16_t);
 void ConfigSetBootloaderMode(uint8_t);
 void ConfigSetBytes(uint8_t, const uint8_t *, uint8_t);
 void ConfigSetComfortLock(uint8_t);
