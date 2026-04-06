@@ -22,60 +22,57 @@ static const uint8_t IBUS_SES_NAV_ZOOM_CONSTANT[IBUS_SES_ZOOM_LEVELS] = {
     0x13  // 5 mi 10km
 };
 
-int set_interface_attribs (int fd, int speed, int parity) {
-        struct termios tty;
-        if (tcgetattr (fd, &tty) != 0)
-        {
-                LogError("error %d from tcgetattr", errno);
-                return -1;
-        }
+char *portname = "/dev/ttyUSB0";
 
-        cfsetospeed (&tty, speed);
-        cfsetispeed (&tty, speed);
+static void IBusConfigurePort(int fd)
+{
+    struct termios tio;
 
-        tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8;     // 8-bit chars
-        // disable IGNBRK for mismatched speed tests; otherwise receive break
-        // as \000 chars
-        tty.c_iflag &= ~IGNBRK;         // disable break processing
-        tty.c_lflag = 0;                // no signaling chars, no echo,
-                                        // no canonical processing
-        tty.c_oflag = 0;                // no remapping, no delays
-        tty.c_cc[VMIN]  = 0;            // read doesn't block
-        tty.c_cc[VTIME] = 5;            // 0.5 seconds read timeout
-
-        tty.c_iflag &= ~(IXON | IXOFF | IXANY); // shut off xon/xoff ctrl
-
-        tty.c_cflag |= (CLOCAL | CREAD);// ignore modem controls,
-                                        // enable reading
-        tty.c_cflag &= ~(PARENB | PARODD);      // shut off parity
-        tty.c_cflag |= parity;
-        tty.c_cflag &= ~CSTOPB;
-        tty.c_cflag &= ~CRTSCTS;
-
-        if (tcsetattr (fd, TCSANOW, &tty) != 0)
-        {
-            LogError("error %d from tcsetattr", errno);
-            return -1;
-        }
-        return 0;
-}
-
-void set_blocking(int fd, int should_block) {
-    struct termios tty;
-    memset (&tty, 0, sizeof tty);
-    if (tcgetattr (fd, &tty) != 0) {
-       LogError("error %d from tggetattr", errno);
-       return;
+    if (tcgetattr(fd, &tio) < 0) {
+        LogError("IBus: tcgetattr failed: %s", strerror(errno));
+        return;
     }
 
-    tty.c_cc[VMIN]  = should_block ? 1 : 0;
-    tty.c_cc[VTIME] = 5;            // 0.5 seconds read timeout
+    // Clear everything first
+    memset(&tio, 0, sizeof(tio));
 
-    if (tcsetattr(fd, TCSANOW, &tty) != 0)
-       LogError("error %d setting term attributes", errno);
+    //
+    // --- CRITICAL I-BUS SETTINGS ---
+    //
+    tio.c_cflag =
+          B9600      |   // 9600 baud
+          CS8        |   // 8 data bits
+          PARENB     |   // Parity enabled
+          PARODD     |   // ODD parity
+          CSTOPB     |   // 2 stop bits
+          CLOCAL     |   // Ignore modem control lines
+          CREAD;         // Enable receiver
+
+    // --- INPUT FLAGS ---
+    tio.c_iflag =
+          IGNPAR |       // Ignore parity errors
+          IGNBRK;        // Ignore break conditions
+
+    // --- OUTPUT FLAGS ---
+    tio.c_oflag = 0;     // No output processing
+
+    // --- LOCAL FLAGS ---
+    tio.c_lflag = 0;     // Raw mode (NO ECHO, NO CANONICAL MODE)
+
+    // --- CONTROL CHARACTERS ---
+    tio.c_cc[VMIN]  = 1;   // Read returns after 1 byte
+    tio.c_cc[VTIME] = 1;   // 0.1s timeout
+
+    // --- Flush and apply ---
+    if (tcflush(fd, TCIFLUSH) < 0) {
+        LogError("IBus: tcflush failed: %s", strerror(errno));
+    }
+
+    if (tcsetattr(fd, TCSANOW, &tio) < 0) {
+        LogError("IBus: tcsetattr failed: %s", strerror(errno));
+    }
 }
 
-char *portname = "/dev/ttyUSB0";
 
 IBus_t IBusInit() {
     LogInfo(LOG_SOURCE_IBUS, "IbusInit");
@@ -85,33 +82,8 @@ IBus_t IBusInit() {
         LogError("error %d opening %s: %s", errno, portname, strerror (errno));
         exit(1);
     }
-    struct termios newtio,oldtio;
-    /* Open IBUS serial line */
-    /* save current serial port settings */
-    if (tcgetattr(ibus.serialPort, &oldtio) < 0) {
-        LogError("Can't get current port settings");
-    }
 
-    /*set line*/
-    bzero(&newtio, sizeof(newtio)); /* clear struct for new port settings */
-    newtio.c_cflag =    B9600 | /*9600 baud*/
-                        CS8 | /*8 bits.*/
-                        PARENB | /*Parity enable.*/
-                        PARODD | /*ODD parity - CRITICAL FOR I-BUS*/
-                        CSTOPB | /*2 STOP BITS - CRITICAL FOR I-BUS*/
-                        CLOCAL | /*Ignore modem status lines.*/
-                        CREAD; /*Enable receiver.*/
-    newtio.c_iflag = IGNPAR | IGNBRK; /*Ignore characters with parity errors., Ignore break condition.*/
-    newtio.c_oflag = 0;
-    newtio.c_lflag = 0;
-    newtio.c_cc[VMIN]=1; /*read one byte at the time. TODO: try vmin =max and VTIME=0.2*/
-    newtio.c_cc[VTIME]=10;
-    if(tcflush(ibus.serialPort, TCIFLUSH) < 0){
-    	LogError("tcflush");
-    }
-    if(tcsetattr(ibus.serialPort, TCSANOW, &newtio) < 0){
-    	LogError("tcsetattr");
-    }
+    IBusConfigurePort(ibus.serialPort);
 
     // Log startup status
     LogInfo(LOG_SOURCE_IBUS, "=== IBus Serial Port Ready ===");
@@ -122,8 +94,6 @@ IBus_t IBusInit() {
     LogInfo(LOG_SOURCE_IBUS, "Status: Waiting for I-Bus traffic");
     LogInfo(LOG_SOURCE_IBUS, "==============================");
 
-    //set_interface_attribs (ibus.serialPort, B9600, 0);  // set speed to 9600 bps, 8n1 (no parity)
-    //set_blocking (ibus.serialPort, 0);                // set no blocking
     ibus.cdChangerFunction = IBUS_CDC_FUNC_NOT_PLAYING;
     ibus.ignitionStatus = IBUS_IGNITION_OFF;
     ibus.gtVersion = ConfigGetNavType();
@@ -757,21 +727,8 @@ void WriteToSerial(int fd, const uint8_t *data, size_t length) {
 
 void *IBusProcess(void *args)
 {
-    static uint8_t busReadyLogged = 0;
-
     IBusProcessArgs *processArgs = (IBusProcessArgs *)args;
     IBus_t *ibus = processArgs->ibus;
-
-    /* Log startup once */
-    if (!busReadyLogged) {
-        long long unsigned int ts = (long long unsigned int) TimerGetMillis();
-        LogRaw("[%llu] INFO: IBus: READY - Serial port initialized, RX/TX processing started\r\n", ts);
-        LogRaw("[%llu] INFO: IBus: Baud Rate: 9600, Data: 8, Parity: None, Stop: 1\r\n", ts);
-        LogRaw("[%llu] INFO: IBus: RX Buffer: %u bytes, TX Buffer: %u bytes\r\n",
-               ts, IBUS_RX_BUFFER_SIZE, IBUS_TX_BUFFER_SIZE);
-        LogRaw("[%llu] INFO: IBus: Waiting for bus activity...\r\n", ts);
-        busReadyLogged = 1;
-    }
 
     /* ---- MAIN LOOP ---- */
     while (!shutting_down) {
@@ -802,6 +759,9 @@ void *IBusProcess(void *args)
 
             if (bytesRead > 0) {
                 ibus->rxBufferIdx += bytesRead;
+                if (ibus->rxLastStamp == 0) {
+                    EventTriggerCallback(IBUS_EVENT_FIRST_MESSAGE_RECEIVED, 0);
+                }
                 ibus->rxLastStamp = TimerGetMillis();
             }
             else if (bytesRead == -1 && errno == EAGAIN) {
@@ -821,13 +781,13 @@ void *IBusProcess(void *args)
             /* Invalid length */
             if (msgLength > IBUS_MAX_MSG_LENGTH) {
                 long long unsigned int ts = (long long unsigned int) TimerGetMillis();
-                LogRawDebug(LOG_SOURCE_IBUS, "[%llu] ERROR: IBus: RX Invalid Length [%d - %02X]: ",
+                LogRaw("[%llu] ERROR: IBus: RX Invalid Length [%d - %02X]: ",
                             ts, msgLength, ibus->rxBuffer[1]);
 
                 for (uint8_t i = 0; i < ibus->rxBufferIdx; i++)
-                    LogRawDebug(LOG_SOURCE_IBUS, "%02X ", ibus->rxBuffer[i]);
+                    LogRaw("%02X ", ibus->rxBuffer[i]);
 
-                LogRawDebug(LOG_SOURCE_IBUS, "\r\n");
+                LogRaw("\r\n");
 
                 memset(ibus->rxBuffer, 0, IBUS_RX_BUFFER_SIZE);
                 ibus->rxBufferIdx = 0;
@@ -840,12 +800,12 @@ void *IBusProcess(void *args)
                 memcpy(pkt, ibus->rxBuffer, msgLength);
 
                 long long unsigned int ts = (long long unsigned int) TimerGetMillis();
-                LogRawDebug(LOG_SOURCE_IBUS, "[%llu] DEBUG: IBus: RX[%d]: ", ts, msgLength);
+                LogRaw("[%llu] DEBUG: IBus: RX[%d]: ", ts, msgLength);
 
                 for (uint8_t i = 0; i < msgLength; i++)
-                    LogRawDebug(LOG_SOURCE_IBUS, "%02X ", pkt[i]);
+                    LogRaw("%02X ", pkt[i]);
 
-                LogRawDebug(LOG_SOURCE_IBUS, "\r\n");
+                LogRaw("\r\n");
 
                 /* Check for self‑echo */
                 if (memcmp(ibus->txBuffer[ibus->txBufferReadbackIdx], pkt, msgLength) == 0) {
@@ -919,12 +879,12 @@ void *IBusProcess(void *args)
             uint8_t msgLen = ibus->txBuffer[ibus->txBufferReadIdx][1] + 2;
 
             long long unsigned int ts = (long long unsigned int) TimerGetMillis();
-            LogRawDebug(LOG_SOURCE_IBUS, "[%llu] DEBUG: IBus: TX[%d]: ", ts, msgLen);
+            LogRaw("[%llu] DEBUG: IBus: TX[%d]: ", ts, msgLen);
 
             for (uint8_t i = 0; i < msgLen; i++)
-                LogRawDebug(LOG_SOURCE_IBUS, "%02X ", ibus->txBuffer[ibus->txBufferReadIdx][i]);
+                LogRaw("%02X ", ibus->txBuffer[ibus->txBufferReadIdx][i]);
 
-            LogRawDebug(LOG_SOURCE_IBUS, "\r\n");
+            LogRaw("\r\n");
 
             for (uint8_t i = 0; i < msgLen; i++)
                 WriteToSerial(ibus->serialPort, &ibus->txBuffer[ibus->txBufferReadIdx][i], 1);
@@ -941,13 +901,13 @@ void *IBusProcess(void *args)
             if ((now - ibus->rxLastStamp) > IBUS_RX_BUFFER_TIMEOUT) {
 
                 long long unsigned int ts = (long long unsigned int) TimerGetMillis();
-                LogRawDebug(LOG_SOURCE_IBUS, "[%llu] ERROR: IBus: RX Buffer Timeout [%d]: ",
+                LogRaw("[%llu] ERROR: IBus: RX Buffer Timeout [%d]: ",
                             ts, ibus->rxBufferIdx);
 
                 for (uint8_t i = 0; i < ibus->rxBufferIdx; i++)
-                    LogRawDebug(LOG_SOURCE_IBUS, "%02X ", ibus->rxBuffer[i]);
+                    LogRaw("%02X ", ibus->rxBuffer[i]);
 
-                LogRawDebug(LOG_SOURCE_IBUS, "\r\n");
+                LogRaw("\r\n");
 
                 memset(ibus->rxBuffer, 0, IBUS_RX_BUFFER_SIZE);
                 ibus->rxBufferIdx = 0;

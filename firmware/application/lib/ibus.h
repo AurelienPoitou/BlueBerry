@@ -414,7 +414,7 @@
 #define IBUS_EVENT_MODULE_STATUS_RESP 54
 #define IBUS_EVENT_IKE_VEHICLE_CONFIG 55
 #define IBUS_EVENT_LCMRedundantData 56
-#define IBUS_EVENT_FirstMessageReceived 57
+#define IBUS_EVENT_FIRST_MESSAGE_RECEIVED 57
 #define IBUS_EVENT_GTDIAOSIdentityResponse 58
 #define IBUS_EVENT_IKESpeedRPMUpdate 59
 #define IBUS_EVENT_ModuleStatusRequest 60

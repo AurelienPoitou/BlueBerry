@@ -55,7 +55,7 @@ HEADERS = \
     ui/mid.h
 
 # Output binary
-OUTPUT = application
+OUTPUT = bluebus
 
 # Build rules
 all: $(OUTPUT)

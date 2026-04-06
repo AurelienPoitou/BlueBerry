@@ -20,7 +20,7 @@ void HandlerIBusInit(HandlerContext_t *context)
         context
     );
     EventRegisterCallback(
-        IBUS_EVENT_FirstMessageReceived,
+        IBUS_EVENT_FIRST_MESSAGE_RECEIVED,
         &HandlerIBusFirstMessageReceived,
         context
     );
@@ -1452,6 +1452,7 @@ void HandlerTimerIBusPDCDistance(void *ctx)
 void HandlerTimerIBusPings(void *ctx)
 {
     HandlerContext_t *context = (HandlerContext_t *) ctx;
+    LogDebug(LOG_SOURCE_SYSTEM, "HandlerTimerIBusPings - State: %i", context->ibusModulePingState);
     switch(context->ibusModulePingState) {
         case HANDLER_IBUS_MODULE_PING_STATE_READY: {
             context->ibusModulePingState = HANDLER_IBUS_MODULE_PING_STATE_IKE;

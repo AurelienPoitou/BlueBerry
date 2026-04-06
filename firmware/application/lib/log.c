@@ -16,94 +16,124 @@ static void log_write(const char *msg)
 }
 
 /* Internal helper: format + write */
-static void log_format_and_write(const char *prefix, const char *msg)
+static void log_format_and_write(const char *prefix,
+                                 const char *file,
+                                 int line,
+                                 const char *msg)
 {
+    bool is_binary = false;
+    size_t msg_len = strnlen(msg, LOG_MESSAGE_SIZE);
+
+    for (size_t i = 0; i < msg_len; i++) {
+        unsigned char c = msg[i];
+        if ((c < 0x20 || c > 0x7E) && c != '\n' && c != '\t') {
+            is_binary = true;
+            break;
+        }
+    }
+
     char output[LOG_MESSAGE_SIZE];
     long long unsigned ts = (long long unsigned) TimerGetMillis();
 
-    if (prefix)
-        snprintf(output, sizeof(output), "[%llu] %s: %s\n", ts, prefix, msg);
-    else
-        snprintf(output, sizeof(output), "[%llu] %s\n", ts, msg);
+    if (is_binary) {
+        // Hex dump buffer
+        char hex[LOG_MESSAGE_SIZE * 3];
+        size_t p = 0;
+        for (size_t i = 0; i < msg_len && p < sizeof(hex) - 4; i++) {
+            p += snprintf(hex + p, sizeof(hex) - p, "%02X ", (unsigned char)msg[i]);
+        }
+
+        // Print diagnostic message
+        snprintf(output, sizeof(output),
+                 "[%llu] BINARY LOG DETECTED from %s\n"
+                 "  Raw length: %zu bytes\n"
+                 "  Hex dump: %s\n",
+                 ts, prefix ? prefix : "(no prefix)", msg_len, hex);
+
+        log_write(output);
+        return;
+    }
+
+    snprintf(output, sizeof(output),
+             "[%llu] %s (%s:%d): %s\n",
+             ts,
+             prefix ? prefix : "",
+             file,
+             line,
+             msg);
 
     log_write(output);
 }
 
 /* ---------------- PUBLIC API (unchanged signatures) ---------------- */
 
-void LogMessage(const char *type, const char *data)
-{
-    log_format_and_write(type, data);
-}
-
-void LogRaw(const char *format, ...)
+void LogDebugInternal(uint8_t src, const char *file, int line,
+                      const char *fmt, ...)
 {
     char buffer[LOG_MESSAGE_SIZE];
     va_list args;
-    va_start(args, format);
-    vsnprintf(buffer, sizeof(buffer), format, args);
+    va_start(args, fmt);
+    vsnprintf(buffer, sizeof(buffer), fmt, args);
     va_end(args);
 
-    log_write(buffer);
+    log_format_and_write("DEBUG", file, line, buffer);
 }
 
-void LogRawDebug(uint8_t source, const char *format, ...)
-{
-    (void)source; // unused for now
-
-    char buffer[LOG_MESSAGE_SIZE];
-    va_list args;
-    va_start(args, format);
-    vsnprintf(buffer, sizeof(buffer), format, args);
-    va_end(args);
-
-    log_write(buffer);
-}
-
-void LogDebug(uint8_t source, const char *format, ...)
-{
-    (void)source;
-
-    char buffer[LOG_MESSAGE_SIZE];
-    va_list args;
-    va_start(args, format);
-    vsnprintf(buffer, sizeof(buffer), format, args);
-    va_end(args);
-
-    LogMessage("DEBUG", buffer);
-}
-
-void LogError(const char *format, ...)
+void LogInfoInternal(uint8_t src, const char *file, int line,
+                     const char *fmt, ...)
 {
     char buffer[LOG_MESSAGE_SIZE];
     va_list args;
-    va_start(args, format);
-    vsnprintf(buffer, sizeof(buffer), format, args);
+    va_start(args, fmt);
+    vsnprintf(buffer, sizeof(buffer), fmt, args);
     va_end(args);
 
-    LogMessage("ERROR", buffer);
+    log_format_and_write("INFO", file, line, buffer);
 }
 
-void LogInfo(uint8_t source, const char *format, ...)
-{
-    (void)source;
-
-    char buffer[LOG_MESSAGE_SIZE];
-    va_list args;
-    va_start(args, format);
-    vsnprintf(buffer, sizeof(buffer), format, args);
-    va_end(args);
-
-    LogMessage("INFO", buffer);
-}
-
-void LogWarning(const char *format, ...)
+void LogErrorInternal(const char *file, int line,
+                      const char *fmt, ...)
 {
     char buffer[LOG_MESSAGE_SIZE];
     va_list args;
-    va_start(args, format);
-    vsnprintf(buffer, sizeof(buffer), format, args);
+    va_start(args, fmt);
+    vsnprintf(buffer, sizeof(buffer), fmt, args);
     va_end(args);
 
-    LogMessage("WARNING", buffer);
+    log_format_and_write("ERROR", file, line, buffer);
+}
+
+void LogWarningInternal(const char *file, int line,
+                        const char *fmt, ...)
+{
+    char buffer[LOG_MESSAGE_SIZE];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buffer, sizeof(buffer), fmt, args);
+    va_end(args);
+
+    log_format_and_write("WARN", file, line, buffer);
+}
+
+void LogRawInternal(const char *file, int line,
+                         const char *fmt, ...)
+{
+    char buffer[LOG_MESSAGE_SIZE];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buffer, sizeof(buffer), fmt, args);
+    va_end(args);
+
+    // RAWDEBUG must NOT add prefix, file, line, or newline.
+    // It must behave exactly like the old logger.
+    pthread_mutex_lock(&log_mutex);
+    fputs(buffer, stdout);   // no newline
+    fflush(stdout);
+    pthread_mutex_unlock(&log_mutex);
+}
+
+void LogMessageInternal(const char *file, int line,
+                        const char *prefix, const char *msg)
+{
+    log_format_and_write(prefix, file, line, msg);
 }
