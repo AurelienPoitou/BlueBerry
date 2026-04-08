@@ -1578,5 +1578,10 @@ void HandlerTimerIBusPings(void *ctx)
             TimerUnregisterScheduledTask(&HandlerTimerIBusPings);
             break;
         }
+        case HANDLER_IBUS_MODULE_PING_STATE_OFF: {
+            LogWarning("Stopping HandlerTimerIBusPings.");
+            TimerUnregisterScheduledTask(&HandlerTimerIBusPings);
+            break;
+        }
     }
 }
