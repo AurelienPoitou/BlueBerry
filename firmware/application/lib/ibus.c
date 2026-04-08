@@ -8,6 +8,7 @@
 #include "log.h"
 #include "timer.h"
 #include "ibus.h"
+#include "ibus_pretty.h"
 #include "shutdown.h"
 #include <sys/sysmacros.h>
 
@@ -730,6 +731,8 @@ void *IBusProcess(void *args)
     IBusProcessArgs *processArgs = (IBusProcessArgs *)args;
     IBus_t *ibus = processArgs->ibus;
 
+    IBusCommandLMGetClusterIndicators(ibus);
+
     /* ---- MAIN LOOP ---- */
     while (!shutting_down) {
         /* ---- WAIT FOR RX DATA (select) ---- */
@@ -799,13 +802,7 @@ void *IBusProcess(void *args)
                 uint8_t pkt[msgLength];
                 memcpy(pkt, ibus->rxBuffer, msgLength);
 
-                long long unsigned int ts = (long long unsigned int) TimerGetMillis();
-                LogRaw("[%llu] DEBUG: IBus: RX[%d]: ", ts, msgLength);
-
-                for (uint8_t i = 0; i < msgLength; i++)
-                    LogRaw("%02X ", pkt[i]);
-
-                LogRaw("\r\n");
+                IBusPrettyPrint(pkt, msgLength, "RX");
 
                 /* Check for self‑echo */
                 if (memcmp(ibus->txBuffer[ibus->txBufferReadbackIdx], pkt, msgLength) == 0) {

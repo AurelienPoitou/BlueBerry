@@ -26,10 +26,22 @@ static void log_format_and_write(const char *prefix,
 
     for (size_t i = 0; i < msg_len; i++) {
         unsigned char c = msg[i];
-        if ((c < 0x20 || c > 0x7E) && c != '\n' && c != '\t') {
-            is_binary = true;
-            break;
-        }
+
+        // Allow ASCII printable + newline + tab
+        if ((c >= 0x20 && c <= 0x7E) || c == '\n' || c == '\t')
+            continue;
+
+        // Allow UTF‑8 continuation bytes (0x80–0xBF)
+        if (c >= 0x80 && c <= 0xBF)
+            continue;
+
+        // Allow UTF‑8 leading bytes (0xC0–0xF4)
+        if (c >= 0xC0 && c <= 0xF4)
+            continue;
+
+        // Everything else is binary
+        is_binary = true;
+        break;
     }
 
     char output[LOG_MESSAGE_SIZE];

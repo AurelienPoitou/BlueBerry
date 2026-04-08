@@ -17,6 +17,7 @@ SRC = \
     lib/config.c \
     lib/event.c \
     lib/ibus.c \
+    lib/ibus_pretty.c \
     lib/locale.c \
     lib/log.c \
     lib/shutdown.c \
@@ -43,6 +44,7 @@ HEADERS = \
     lib/config.h \
     lib/event.h \
     lib/ibus.h \
+    lib/ibus_pretty.h \
     lib/locale.h \
     lib/log.h \
     lib/shutdown.h \
