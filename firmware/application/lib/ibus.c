@@ -28,57 +28,25 @@ char *portname = "/dev/ttyUSB0";
 static void IBusConfigurePort(int fd)
 {
     struct termios tio;
+    tcgetattr(fd, &tio);
 
-    if (tcgetattr(fd, &tio) < 0) {
-        LogError("IBus: tcgetattr failed: %s", strerror(errno));
-        return;
-    }
+    cfmakeraw(&tio);
 
-    // Clear everything first
-    memset(&tio, 0, sizeof(tio));
+    cfsetispeed(&tio, B9600);
+    cfsetospeed(&tio, B9600);
 
-    //
-    // --- CRITICAL I-BUS SETTINGS ---
-    //
-    tio.c_cflag =
-          B9600      |   // 9600 baud
-          CS8        |   // 8 data bits
-          PARENB     |   // Parity enabled
-          PARODD     |   // ODD parity
-          CSTOPB     |   // 2 stop bits
-          CLOCAL     |   // Ignore modem control lines
-          CREAD;         // Enable receiver
+    tio.c_cflag |= (CLOCAL | CREAD | PARENB);
+    tio.c_cflag &= ~PARODD;     // EVEN parity
+    tio.c_cflag &= ~CSTOPB;     // 1 stop bit
 
-    // --- INPUT FLAGS ---
-    tio.c_iflag =
-          IGNPAR |       // Ignore parity errors
-          IGNBRK;        // Ignore break conditions
-
-    // --- OUTPUT FLAGS ---
-    tio.c_oflag = 0;     // No output processing
-
-    // --- LOCAL FLAGS ---
-    tio.c_lflag = 0;     // Raw mode (NO ECHO, NO CANONICAL MODE)
-
-    // --- CONTROL CHARACTERS ---
-    tio.c_cc[VMIN]  = 1;   // Read returns after 1 byte
-    tio.c_cc[VTIME] = 1;   // 0.1s timeout
-
-    // --- Flush and apply ---
-    if (tcflush(fd, TCIFLUSH) < 0) {
-        LogError("IBus: tcflush failed: %s", strerror(errno));
-    }
-
-    if (tcsetattr(fd, TCSANOW, &tio) < 0) {
-        LogError("IBus: tcsetattr failed: %s", strerror(errno));
-    }
+    tcflush(fd, TCIOFLUSH);
+    tcsetattr(fd, TCSANOW, &tio);
 }
-
 
 IBus_t IBusInit() {
     LogInfo(LOG_SOURCE_IBUS, "IbusInit");
     IBus_t ibus;
-    ibus.serialPort = open(portname, O_RDWR | O_NOCTTY | O_NONBLOCK);
+    ibus.serialPort = open(portname, O_RDWR | O_NOCTTY | O_SYNC);
     if (ibus.serialPort < 0) {
         LogError("error %d opening %s: %s", errno, portname, strerror (errno));
         exit(1);
@@ -731,8 +699,6 @@ void *IBusProcess(void *args)
     IBusProcessArgs *processArgs = (IBusProcessArgs *)args;
     IBus_t *ibus = processArgs->ibus;
 
-    IBusCommandLMGetClusterIndicators(ibus);
-
     /* ---- MAIN LOOP ---- */
     while (!shutting_down) {
         /* ---- WAIT FOR RX DATA (select) ---- */
@@ -883,8 +849,7 @@ void *IBusProcess(void *args)
 
             LogRaw("\r\n");
 
-            for (uint8_t i = 0; i < msgLen; i++)
-                WriteToSerial(ibus->serialPort, &ibus->txBuffer[ibus->txBufferReadIdx][i], 1);
+            WriteToSerial(ibus->serialPort, ibus->txBuffer[ibus->txBufferReadIdx], msgLen);
 
             ibus->txBufferReadIdx =
                 (ibus->txBufferReadIdx + 1) % IBUS_TX_BUFFER_SIZE;
